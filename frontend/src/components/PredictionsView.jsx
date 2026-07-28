@@ -103,6 +103,3 @@ export function AnomaliesView() {
   );
 }
 
-export function AnomaliesView() {
-  // ... (rest of the component stays the same)
-}

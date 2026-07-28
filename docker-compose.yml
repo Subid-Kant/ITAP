@@ -6,13 +6,21 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite+aiosqlite:///./cyberpulse.db
+      - DATABASE_URL=sqlite+aiosqlite:///./itap.db
       - DEBUG=True
+      - ENVIRONMENT=development
     env_file:
       - ./backend/.env
     volumes:
       - ./backend:/app
+      - itap_db:/app/data
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   frontend:
     build: ./frontend
@@ -23,4 +31,9 @@ services:
       - /app/node_modules
     command: npm run dev -- --host
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+
+volumes:
+  itap_db:
+    driver: local

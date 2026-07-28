@@ -1,1 +1,1 @@
-from .ml_engine import LSTMPredictor, AutoencoderDetector, SeverityScorer
+from .ml_engine import LSTMPredictor, AutoencoderDetector, SeverityScorer, ThreatTrendAnalyzer

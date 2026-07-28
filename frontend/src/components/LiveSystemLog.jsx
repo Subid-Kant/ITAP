@@ -1,80 +1,93 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, Activity, Zap, Cpu } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Terminal, Wifi, WifiOff } from 'lucide-react';
+import { useWebSocket } from '../hooks/useWebSocket';
 
-const LOG_MESSAGES = [
-  "Analyzing ingress traffic on port 443...",
-  "LSTM model detecting pattern similarity to APT28...",
-  "Correlating OSINT data from VirusTotal and Shodan...",
-  "Anomaly detected in lateral movement patterns (Confidence: 89%)...",
-  "NVD database sync complete. 12 new CVEs categorized...",
-  "MITRE ATT&CK mapping updated: Technique T1059.001 detected...",
-  "Autoencoder training delta stable: 0.002% variance...",
-  "Scrubbing false positives from reputation feed...",
-  "Threat DNA fingerprint generated: 8f2b...c91e...",
-  "Geo-locating source IP 194.26.135.21 (Russia, Moscow)...",
-  "Response playbook generated for Remote Code Execution...",
-  "Security Posture Score recalculated: 94.2%...",
-  "SIEM integration heartbeat: Operational...",
-  "DDoS mitigation absorbing 45Gbps peak flow...",
-  "Scanning target infrastructure for open S3 buckets...",
+const EVENT_TYPE_META = {
+  threat_detected: { color: 'var(--severity-critical)', prefix: '[THREAT]', symbol: '⚠' },
+  scan_complete: { color: 'var(--accent-blue)', prefix: '[SCAN]', symbol: '◉' },
+  incident_created: { color: 'var(--severity-high)', prefix: '[INCIDENT]', symbol: '⚡' },
+  system_event: { color: 'var(--accent-cyan)', prefix: '[SYSTEM]', symbol: '→' },
+  connected: { color: 'var(--accent-green)', prefix: '[WS]', symbol: '✓' },
+};
+
+const FALLBACK_EVENTS = [
+  { type: 'system_event', level: 'info', message: 'OSINT correlation engine initialized', detail: 'Shodan, VT, OTX active' },
+  { type: 'system_event', level: 'info', message: 'LSTM threat predictor loaded', detail: 'v2.0 numpy engine' },
+  { type: 'system_event', level: 'info', message: 'MITRE ATT&CK matrix loaded', detail: '14 tactics, 150+ techniques' },
+  { type: 'system_event', level: 'warning', message: 'Anomaly threshold crossed', detail: 'Autoencoder score 0.91' },
+  { type: 'threat_detected', data: { title: 'Reconnaissance scan detected', severity: 'medium' }, message: 'Reconnaissance scan detected' },
+  { type: 'system_event', level: 'info', message: 'Kill-chain engine ready', detail: 'Phase prediction active' },
+  { type: 'system_event', level: 'info', message: 'Playbook generator initialized', detail: '10 templates loaded' },
 ];
 
-export default function LiveSystemLog() {
-  const [logs, setLogs] = useState([]);
-  const logEndRef = useRef(null);
+function EventLine({ event, index }) {
+  const meta = EVENT_TYPE_META[event.type] || EVENT_TYPE_META.system_event;
+  const message = event.message || event.data?.title || JSON.stringify(event).slice(0, 60);
+  const detail = event.detail || event.data?.target || event.data?.severity || '';
+  const level = event.level || event.data?.severity || 'info';
 
-  useEffect(() => {
-    // Initial logs
-    setLogs(LOG_MESSAGES.slice(0, 5).map((m, i) => ({
-      id: i,
-      msg: m,
-      time: new Date(Date.now() - (5 - i) * 1000).toLocaleTimeString(),
-      type: i % 4 === 0 ? 'alert' : 'info'
-    })));
-
-    const interval = setInterval(() => {
-      const msg = LOG_MESSAGES[Math.floor(Math.random() * LOG_MESSAGES.length)];
-      setLogs(prev => [...prev.slice(-14), {
-        id: Date.now(),
-        msg,
-        time: new Date().toLocaleTimeString(),
-        type: Math.random() > 0.8 ? 'alert' : 'info'
-      }]);
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+  const levelColor = {
+    critical: 'var(--severity-critical)',
+    error: 'var(--severity-critical)',
+    warning: 'var(--severity-high)',
+    info: meta.color,
+  }[level] || meta.color;
 
   return (
-    <div className="panel glass" style={{ height: '100%', minHeight: '300px', display: 'flex', flexDirection: 'column' }}>
+    <div className="log-line" style={{ animationDelay: `${index * 0.05}s` }}>
+      <span className="log-time">{new Date().toLocaleTimeString('en', { hour12: false })}</span>
+      <span className="log-symbol" style={{ color: levelColor }}>{meta.symbol}</span>
+      <span className="log-prefix" style={{ color: levelColor }}>{meta.prefix}</span>
+      <span className="log-message">{message}</span>
+      {detail && <span className="log-detail">— {detail}</span>}
+    </div>
+  );
+}
+
+export default function LiveSystemLog() {
+  const { connected, events } = useWebSocket();
+  const [displayEvents, setDisplayEvents] = useState([]);
+
+  useEffect(() => {
+    if (events.length > 0) {
+      setDisplayEvents(events.slice(0, 20));
+    } else {
+      // Show animated fallback events when not connected
+      const interval = setInterval(() => {
+        setDisplayEvents(prev => {
+          const next = FALLBACK_EVENTS[prev.length % FALLBACK_EVENTS.length];
+          return [{ ...next, id: Date.now() }, ...prev].slice(0, 20);
+        });
+      }, 2500);
+      return () => clearInterval(interval);
+    }
+  }, [events]);
+
+  return (
+    <div className="panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className="panel-header">
-        <div className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Terminal size={16} color="var(--accent-cyan)" />
-          ITAP Neural Engine Stream
+        <div className="panel-title">
+          <Terminal size={16} /> Live System Log
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-            <span className="status-badge" style={{ fontSize: 10 }}>● LIVE</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+          {connected ? (
+            <><Wifi size={12} color="var(--accent-green)" />
+              <span style={{ color: 'var(--accent-green)' }}>LIVE</span></>
+          ) : (
+            <><WifiOff size={12} color="var(--text-muted)" />
+              <span style={{ color: 'var(--text-muted)' }}>DEMO</span></>
+          )}
         </div>
       </div>
-      <div className="panel-body" style={{ flex: 1, overflowY: 'auto', padding: '10px 15px', fontFamily: "'JetBrains Mono', monospace", fontSize: '11px', color: 'var(--text-secondary)' }}>
-        {logs.map((log) => (
-          <div key={log.id} style={{ marginBottom: '6px', borderLeft: log.type === 'alert' ? '2px solid var(--accent-red)' : '2px solid transparent', paddingLeft: '8px' }}>
-            <span style={{ color: 'var(--accent-blue)', marginRight: '8px' }}>[{log.time}]</span>
-            <span style={{ color: log.type === 'alert' ? 'var(--accent-red)' : 'inherit' }}>{log.msg}</span>
-          </div>
+      <div className="log-container">
+        {displayEvents.map((evt, i) => (
+          <EventLine key={evt.id || i} event={evt} index={i} />
         ))}
-        <div ref={logEndRef} />
-      </div>
-      <div style={{ padding: '8px 15px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', gap: 12, fontSize: 10 }}>
-             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Activity size={10} /> 12.4k req/s</span>
-             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Cpu size={10} /> 14% Load</span>
+        {displayEvents.length === 0 && (
+          <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>
+            Awaiting events...
           </div>
-          <div style={{ fontSize: 10, color: 'var(--accent-cyan)' }}>MODEL: ITAP-GEN-2</div>
+        )}
       </div>
     </div>
   );

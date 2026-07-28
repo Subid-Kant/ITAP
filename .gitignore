@@ -15,10 +15,11 @@ backend/venv/
 backend/__pycache__/
 *.pyc
 
-# Environment files
+# Environment & Database files
 .env
 .env.local
 .env.*.local
+*.db
 
 # OS files
 .DS_Store
