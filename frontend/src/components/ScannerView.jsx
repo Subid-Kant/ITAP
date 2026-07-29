@@ -19,8 +19,7 @@ export default function ScannerView() {
       const scan = await api.runScan({ target_id: target.id, scan_types: ['shodan', 'virustotal', 'cve'] });
       setResults(scan);
     } catch (e) {
-      // Demo fallback
-      setResults(getDemoScanResult(domain));
+      setError(e.message || 'Scan failed to complete. Please ensure backend services are running and the target is reachable.');
     } finally {
       setScanning(false);
     }
@@ -100,19 +99,3 @@ export default function ScannerView() {
   );
 }
 
-function getDemoScanResult(domain) {
-  const r = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-  const score = r(35, 90);
-  return {
-    target: domain, risk_score: score,
-    risk_level: score >= 75 ? 'CRITICAL' : score >= 50 ? 'HIGH' : score >= 30 ? 'MEDIUM' : 'LOW',
-    summary: { open_ports: r(2, 8), known_vulns: r(0, 5), vt_malicious: r(0, 12), recent_cves: r(2, 10), otx_pulses: r(1, 30) },
-    predictions: [
-      { predicted_attack_type: 'Remote Code Execution', predicted_cve: `CVE-2024-${r(10000, 99999)}`, probability: 0.87, severity: 'CRITICAL', confidence: 'high' },
-      { predicted_attack_type: 'SQL Injection', predicted_cve: `CVE-2024-${r(10000, 99999)}`, probability: 0.72, severity: 'HIGH', confidence: 'high' },
-      { predicted_attack_type: 'Privilege Escalation', predicted_cve: `CVE-2024-${r(10000, 99999)}`, probability: 0.58, severity: 'HIGH', confidence: 'medium' },
-      { predicted_attack_type: 'Cross-Site Scripting', predicted_cve: null, probability: 0.41, severity: 'MEDIUM', confidence: 'medium' },
-      { predicted_attack_type: 'Denial of Service', predicted_cve: null, probability: 0.33, severity: 'MEDIUM', confidence: 'low' },
-    ],
-  };
-}

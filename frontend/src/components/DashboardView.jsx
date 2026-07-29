@@ -73,6 +73,20 @@ function ThreatTimeline({ threats }) {
 
 export default function DashboardView({ stats }) {
   if (!stats) return <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">Loading dashboard...</div></div>;
+  
+  if (stats.total_targets === 0 && stats.active_threats === 0) {
+    return (
+      <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', textAlign: 'center' }}>
+        <div style={{ background: 'rgba(55,138,221,0.1)', padding: 30, borderRadius: '50%', marginBottom: 20 }}>
+          <Target size={48} color="#378ADD" />
+        </div>
+        <h2 style={{ color: '#F0EFE9', marginBottom: 10 }}>No Targets Being Monitored</h2>
+        <p style={{ color: '#8892B0', maxWidth: 400, lineHeight: 1.6 }}>
+          Your environment is currently quiet. Add a target in the OSINT Scanner to begin collecting intelligence and generating threat predictions. Live global threats can be viewed in the Incidents tab.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="fade-in">

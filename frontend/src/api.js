@@ -145,6 +145,10 @@ export const api = {
   getThreatTimeline: (days = 30) => request(`/dashboard/threat-timeline?days=${days}`),
   getAdvancedMetrics: () => request('/dashboard/metrics'),
 
+  // ── Monitoring ───────────────────────────────────────────
+  getServerStatus: () => request('/monitoring/server-status'),
+  getGlobalThreats: () => request('/monitoring/global-threats'),
+
   // ── Reports ──────────────────────────────────────────────
   generateReport: (format = 'json', days = 7) =>
     request(`/reports/generate?format=${format}&days=${days}`),

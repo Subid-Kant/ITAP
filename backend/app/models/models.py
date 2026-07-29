@@ -181,6 +181,7 @@ class Incident(Base):
     description = Column(Text, nullable=True)
     severity = Column(SAEnum(SeverityLevel), default=SeverityLevel.MEDIUM)
     status = Column(SAEnum(IncidentStatus), default=IncidentStatus.OPEN)
+    source = Column(String(100), default="scan")  # server_monitor, global_feed, scan
 
     # AI Playbook
     playbook_content = Column(Text, nullable=True)

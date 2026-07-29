@@ -1,11 +1,20 @@
-import { useState } from 'react';
-import { Brain, Eye } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Brain, Eye, Cpu, Database } from 'lucide-react';
 import { api } from '../api';
 
 export default function PredictionsView() {
   const [domain, setDomain] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
+  const [mlStatus, setMlStatus] = useState(null);
+
+  useEffect(() => {
+    // We haven't added this to api.js yet, so use fetch directly for now or add it to api.js
+    fetch('http://localhost:8000/api/v1/ml/status')
+      .then(res => res.json())
+      .then(setMlStatus)
+      .catch(console.error);
+  }, []);
 
   const predict = async () => {
     if (!domain) return;
@@ -22,15 +31,25 @@ export default function PredictionsView() {
 
   return (
     <div className="fade-in">
-      <div className="scan-form">
-        <input className="scan-input" placeholder="Enter domain for LSTM prediction..." value={domain} onChange={e => setDomain(e.target.value)} onKeyDown={e => e.key === 'Enter' && predict()} />
-        <button className="header-btn primary" onClick={predict} disabled={loading}><Brain size={14} /> {loading ? 'Predicting...' : 'Predict Threats'}</button>
+      
+      {/* AI Model Status Banner */}
+      <div style={{ marginBottom: 20, padding: '12px 20px', background: mlStatus?.status === 'online' ? 'rgba(34, 197, 94, 0.1)' : 'rgba(245, 158, 11, 0.1)', border: `1px solid ${mlStatus?.status === 'online' ? '#22C55E' : '#F59E0B'}`, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
+        {mlStatus?.status === 'online' ? <Cpu size={20} color="#22C55E" /> : <Database size={20} color="#F59E0B" />}
+        <div>
+          <div style={{ color: '#F0EFE9', fontWeight: 600, fontSize: 14 }}>Active Engine: {mlStatus?.engine || 'Checking...'}</div>
+          <div style={{ color: '#8892B0', fontSize: 12 }}>{mlStatus?.message || 'Connecting to ML engine...'}</div>
+        </div>
       </div>
-      {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">LSTM model processing...</div></div>}
+
+      <div className="scan-form">
+        <input className="scan-input" placeholder="Enter domain or attack signature for analysis..." value={domain} onChange={e => setDomain(e.target.value)} onKeyDown={e => e.key === 'Enter' && predict()} />
+        <button className="header-btn primary" onClick={predict} disabled={loading}><Brain size={14} /> {loading ? 'Analyzing...' : 'Predict Threats'}</button>
+      </div>
+      {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">{mlStatus?.engine || 'ML Engine'} processing...</div></div>}
       {results && (
         <div className="panel fade-in">
           <div className="panel-header">
-            <div className="panel-title"><Brain size={16} /> Predictions for {results.domain} (Risk: {results.risk_score})</div>
+            <div className="panel-title"><Brain size={16} /> LLM Predictions for {results.domain} (Risk: {results.risk_score})</div>
           </div>
           <div className="panel-body no-pad">
             <table className="threat-table">
@@ -78,7 +97,7 @@ export function AnomaliesView() {
       <button className="header-btn primary" onClick={detect} disabled={loading} style={{ marginBottom: 20 }}>
         <Eye size={14} /> {loading ? 'Detecting...' : 'Run Anomaly Detection'}
       </button>
-      {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">Autoencoder analysing traffic patterns...</div></div>}
+      {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">Llama 3 8B analyzing traffic patterns...</div></div>}
       {anomalies && (
         <div className="panel fade-in">
           <div className="panel-header">

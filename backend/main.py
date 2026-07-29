@@ -17,6 +17,8 @@ from app.core.middleware import SecurityHeadersMiddleware, RequestIDMiddleware, 
 from app.db.database import init_db
 from app.api.routes.api import router as api_router
 from app.api.routes.ws import manager as ws_manager
+from app.services.monitoring.server_monitor import server_monitor
+from app.services.monitoring.global_threat_feed import global_threat_feed
 
 # ── Logging Configuration ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -48,10 +50,19 @@ async def lifespan(app: FastAPI):
     logger.info("✓ Response Engine: Playbook generator, Alert dispatcher")
     logger.info(f"✓ API docs: http://localhost:{settings.PORT}/docs")
     logger.info(f"✓ WebSocket: ws://localhost:{settings.PORT}/ws/live")
+    
+    # Start background monitors
+    await server_monitor.start()
+    await global_threat_feed.start()
+    
     logger.info("=" * 70)
 
     yield
 
+    # Stop background monitors gracefully
+    await server_monitor.stop()
+    await global_threat_feed.stop()
+    
     logger.info("ITAP — Graceful shutdown complete")
 
 

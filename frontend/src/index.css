@@ -1654,3 +1654,70 @@ body::before {
   animation: threat-pulse 2s ease-in-out infinite;
 }
 
+/* ─── Map Animations & Styles ─── */
+.map-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  z-index: 10;
+  transition: transform 0.2s;
+}
+
+.map-dot:hover {
+  transform: translate(-50%, -50%) scale(2);
+  z-index: 100;
+}
+
+.map-dot::before, .map-dot::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.map-dot::before {
+  width: 24px; height: 24px;
+  border: 1px solid currentColor;
+  opacity: 0;
+  animation: radar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.map-dot::after {
+  width: 48px; height: 48px;
+  border: 1px solid currentColor;
+  opacity: 0;
+  animation: radar-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  animation-delay: 0.5s;
+}
+
+.map-dot.critical { width: 12px; height: 12px; box-shadow: 0 0 10px rgba(255, 59, 92, 0.8); }
+.map-dot.high { width: 10px; height: 10px; }
+.map-dot.medium { width: 8px; height: 8px; }
+.map-dot.low { width: 6px; height: 6px; }
+
+@keyframes radar-ping {
+  75%, 100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0.8; }
+}
+
+@keyframes attack-line-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+.attack-line {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: attack-line-draw 2s linear forwards, attack-line-fade 1.5s linear infinite 2s;
+}
+
+@keyframes attack-line-fade {
+  0% { opacity: 0.8; }
+  50% { opacity: 0.2; }
+  100% { opacity: 0.8; }
+}
+
