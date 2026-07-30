@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { Crosshair, AlertTriangle } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 export default function ScannerView() {
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
   const [domain, setDomain] = useState('');
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState('');
 
   const handleScan = async () => {
-    if (!domain.trim()) return;
+    if (!domain.trim() || isViewer) return;
     setScanning(true);
     setError('');
     setResults(null);
@@ -30,8 +33,9 @@ export default function ScannerView() {
       <div className="scan-form">
         <input className="scan-input" type="text" placeholder="Enter domain or IP (e.g. example.com)"
           value={domain} onChange={e => setDomain(e.target.value)}
+          disabled={scanning || isViewer}
           onKeyDown={e => e.key === 'Enter' && handleScan()} />
-        <button className="header-btn primary" onClick={handleScan} disabled={scanning}>
+        <button className="header-btn primary" onClick={handleScan} disabled={scanning || isViewer} title={isViewer ? "Viewer mode restricted" : ""}>
           <Crosshair size={14} /> {scanning ? 'Scanning...' : 'Scan Target'}
         </button>
       </div>

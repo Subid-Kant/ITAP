@@ -99,6 +99,15 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "full_name": current_user.get("name"),
     }
 
+async def check_admin_role(current_user: dict = Depends(get_current_user)):
+    """Dependency to check if current user has admin role."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: Admin access required to perform this action.",
+        )
+    return current_user
+
 
 # ─────────────────────────────────────────────
 # Target Management
@@ -108,7 +117,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 async def create_target(
     target: TargetCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Register a new target domain/IP for monitoring."""
     # Check for duplicate
@@ -164,7 +173,7 @@ async def get_target(
 async def delete_target(
     target_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Delete a target (analyst+ role required)."""
     if current_user.get("role") not in ("admin", "analyst"):
@@ -187,7 +196,7 @@ async def run_osint_scan(
     request: ScanRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """
     Run a comprehensive OSINT scan on a target.
@@ -313,29 +322,37 @@ async def get_scan(
 # Layer 2 — AI/ML Engine
 # ─────────────────────────────────────────────
 
+@router.get("/ml/status", tags=["AI/ML Engine"])
+async def get_ml_status(current_user: dict = Depends(get_current_user)):
+    """Check the status of the local LLM Engine (Llama 3)."""
+    is_up = await LocalLLMService.is_ollama_available()
+    if is_up:
+        return {"status": "online", "engine": "Llama 3 8B (LoRA)", "message": "Connected to local Ollama API."}
+    return {"status": "offline", "engine": "LSTMPredictor / AutoencoderDetector", "message": "Ollama LLM unreachable. Using simulated statistical fallback."}
+
 @router.post("/ml/predict", tags=["AI/ML Engine"])
 async def predict_threats(
     domain: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Run Llama 3 threat prediction for a domain."""
-    # Note: Using mock OSINT data here for direct API calls
-    osint_data = {"summary": {"open_ports": 3, "known_vulns": 2, "vt_malicious": 1}}
-    predictions = await LocalLLMService.generate_prediction(domain, osint_data)
+    # Use real OSINT scanner for live data
+    osint_results = await OSINTAggregator.full_scan(domain, "")
+    predictions = await LocalLLMService.generate_prediction(domain, osint_results)
 
     return {
         "domain": domain,
         "predictions": predictions,
         "prediction_window_hours": 72,
-        "risk_score": 85,
-        "engine": "Llama 3 8B (LoRA)"
+        "risk_score": osint_results.get("risk_score", 50),
+        "engine": "Llama 3 8B (LoRA) / LSTMPredictor"
     }
 
 
 @router.post("/ml/anomaly-detect", tags=["AI/ML Engine"])
 async def detect_anomalies(
     threshold: float = 0.80,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Run LLM-based network anomaly detection."""
     results = await LocalLLMService.detect_anomalies()
@@ -375,7 +392,7 @@ async def calculate_severity(
     exploit_likelihood: float = Query(0.5, ge=0, le=1),
     osint_score: float = Query(0.5, ge=0, le=1),
     active_exploitation: bool = False,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Calculate enhanced CVSS severity score with environmental factors."""
     return SeverityScorer.calculate_score(
@@ -506,7 +523,7 @@ async def get_kill_chain(
 async def enrich_ioc(
     indicator: str,
     indicator_type: str = "domain",
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Enrich an IOC with cross-source intelligence."""
     return IOCEnricher.enrich_ioc(indicator, indicator_type)
@@ -515,7 +532,7 @@ async def enrich_ioc(
 @router.post("/threat-intel/ioc-bulk", tags=["Threat Intelligence"])
 async def bulk_ioc_search(
     indicators: List[Dict[str, str]],
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """
     Bulk IOC enrichment. Accepts list of {indicator, type} objects.
@@ -545,7 +562,7 @@ async def bulk_ioc_search(
 async def create_incident(
     incident: IncidentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Create a new incident with auto-generated response playbook."""
     if current_user.get("role") not in ("admin", "analyst"):
@@ -640,7 +657,7 @@ async def update_incident_status(
     incident_id: str,
     new_status: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Update incident status with audit trail."""
     valid_statuses = [s.value for s in DBIncidentStatus]
@@ -683,7 +700,7 @@ async def update_incident_status(
 async def generate_playbook(
     request: PlaybookRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(check_admin_role),
 ):
     """Generate an AI-powered incident response playbook."""
     playbook = await PlaybookGenerator.generate_playbook(

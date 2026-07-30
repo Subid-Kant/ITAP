@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Bell, Server, Globe, Activity, Cpu, HardDrive } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 export default function IncidentsView({ stats }) {
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
   const [activeTab, setActiveTab] = useState('server');
   const [serverStats, setServerStats] = useState(null);
   const [globalThreats, setGlobalThreats] = useState(null);
@@ -89,7 +92,7 @@ export default function IncidentsView({ stats }) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, color: '#64748B' }}>Detected: {new Date(inc.detected_at).toLocaleString()}</div>
                       <div style={{ display: 'flex', gap: 8 }}>
-                         <button className="header-btn" style={{ fontSize: 11, padding: '4px 10px' }}>Acknowledge</button>
+                         <button className="header-btn" style={{ fontSize: 11, padding: '4px 10px' }} disabled={isViewer} title={isViewer ? "Viewer mode restricted" : ""}>Acknowledge</button>
                       </div>
                     </div>
                   </div>
@@ -117,7 +120,7 @@ export default function IncidentsView({ stats }) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 11, color: '#64748B' }}>Imported: {new Date(inc.detected_at).toLocaleString()}</div>
                       <div style={{ display: 'flex', gap: 8 }}>
-                         <button className="header-btn primary" style={{ fontSize: 11, padding: '4px 10px' }}>Review</button>
+                         <button className="header-btn primary" style={{ fontSize: 11, padding: '4px 10px' }} disabled={isViewer} title={isViewer ? "Viewer mode restricted" : ""}>Review</button>
                       </div>
                     </div>
                   </div>

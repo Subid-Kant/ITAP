@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Brain, Eye, Cpu, Database } from 'lucide-react';
 import { api } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 export default function PredictionsView() {
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
   const [domain, setDomain] = useState('');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
@@ -42,8 +45,8 @@ export default function PredictionsView() {
       </div>
 
       <div className="scan-form">
-        <input className="scan-input" placeholder="Enter domain or attack signature for analysis..." value={domain} onChange={e => setDomain(e.target.value)} onKeyDown={e => e.key === 'Enter' && predict()} />
-        <button className="header-btn primary" onClick={predict} disabled={loading}><Brain size={14} /> {loading ? 'Analyzing...' : 'Predict Threats'}</button>
+        <input className="scan-input" placeholder="Enter domain or attack signature for analysis..." value={domain} onChange={e => setDomain(e.target.value)} disabled={loading || isViewer} onKeyDown={e => e.key === 'Enter' && predict()} />
+        <button className="header-btn primary" onClick={predict} disabled={loading || isViewer} title={isViewer ? "Viewer mode restricted" : ""}><Brain size={14} /> {loading ? 'Analyzing...' : 'Predict Threats'}</button>
       </div>
       {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">{mlStatus?.engine || 'ML Engine'} processing...</div></div>}
       {results && (
@@ -77,6 +80,8 @@ export default function PredictionsView() {
 }
 
 export function AnomaliesView() {
+  const { user } = useAuth();
+  const isViewer = user?.role === 'viewer';
   const [loading, setLoading] = useState(false);
   const [anomalies, setAnomalies] = useState(null);
 
@@ -94,7 +99,7 @@ export function AnomaliesView() {
 
   return (
     <div className="fade-in">
-      <button className="header-btn primary" onClick={detect} disabled={loading} style={{ marginBottom: 20 }}>
+      <button className="header-btn primary" onClick={detect} disabled={loading || isViewer} title={isViewer ? "Viewer mode restricted" : ""} style={{ marginBottom: 20 }}>
         <Eye size={14} /> {loading ? 'Detecting...' : 'Run Anomaly Detection'}
       </button>
       {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">Llama 3 8B analyzing traffic patterns...</div></div>}
