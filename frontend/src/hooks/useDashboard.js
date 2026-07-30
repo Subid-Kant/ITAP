@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
 
-export function useDashboard(isAuthenticated = false) {
+export function useDashboard(isAuthenticated = true) {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isLive, setIsLive] = useState(false);
@@ -23,7 +23,7 @@ export function useDashboard(isAuthenticated = false) {
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, stats]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

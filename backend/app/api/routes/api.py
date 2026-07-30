@@ -934,7 +934,7 @@ async def get_advanced_metrics(
 
 @router.get("/reports/generate", tags=["Reports"])
 async def generate_report(
-    format: str = Query("json", regex="^(json|text)$"),
+    format: str = Query("json", pattern="^(json|text)$"),
     days: int = Query(7, ge=1, le=90),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),

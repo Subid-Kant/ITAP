@@ -36,7 +36,7 @@ async function request(path, options = {}, retries = 1) {
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
   // Handle 401 — try refresh
-  if (res.status === 401 && retries > 0) {
+  if (res.status === 401 && retries > 0 && !path.startsWith('/auth/login')) {
     if (!isRefreshing) {
       isRefreshing = true;
       try {
@@ -44,9 +44,12 @@ async function request(path, options = {}, retries = 1) {
         processRefreshQueue(newToken);
       } catch {
         processRefreshQueue(null);
+        const hadToken = !!localStorage.getItem(TOKEN_KEY);
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(REFRESH_KEY);
-        window.location.reload();
+        if (hadToken) {
+          window.location.reload();
+        }
       } finally {
         isRefreshing = false;
       }

@@ -79,7 +79,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     No Redis required — suitable for single-instance deployment.
     """
 
-    def __init__(self, app: ASGIApp, max_requests: int = 100, window_seconds: int = 60):
+    def __init__(self, app: ASGIApp, max_requests: int = 5000, window_seconds: int = 60):
         super().__init__(app)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
@@ -102,13 +102,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         now = time.time()
-        window_start = now - self.window_seconds
-
-        # Clean old entries
-        if client_ip in self._store:
-            self._store[client_ip] = [t for t in self._store[client_ip] if t > window_start]
-        else:
-            self._store[client_ip] = []
 
         if len(self._store[client_ip]) >= self.max_requests:
             from fastapi.responses import JSONResponse

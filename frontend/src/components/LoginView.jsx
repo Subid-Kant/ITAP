@@ -32,9 +32,11 @@ export default function LoginView() {
     await login(username, password);
   };
 
-  const handleDemoClick = (cred) => {
+  const handleDemoClick = async (cred) => {
     setUsername(cred.username);
-    setPassword(`ITAP@${cred.username.charAt(0).toUpperCase() + cred.username.slice(1)}2025!`);
+    const pass = `ITAP@${cred.username.charAt(0).toUpperCase() + cred.username.slice(1)}2025!`;
+    setPassword(pass);
+    await login(cred.username, pass);
   };
 
   return (

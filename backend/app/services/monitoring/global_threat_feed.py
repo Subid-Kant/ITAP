@@ -82,7 +82,7 @@ class GlobalThreatFeed:
                 return self._cache["kev"]
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.cisa_kev_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(self.cisa_kev_url, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         vuls = data.get("vulnerabilities", [])
@@ -100,7 +100,7 @@ class GlobalThreatFeed:
         """Fetch recent CVEs from circl.lu."""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.recent_cves_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                async with session.get(self.recent_cves_url, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         return data[:15]

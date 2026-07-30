@@ -68,14 +68,8 @@ class ServerMonitor:
             try:
                 stats = await self.get_current_stats()
                 
-                # Log a startup system event on first loop
+                # Log a startup system event on first loop (disabled to prevent clutter)
                 if not self.startup_logged:
-                    await self._create_incident({
-                        "type": "SYSTEM_STARTUP",
-                        "title": "ITAP Server Monitoring Active",
-                        "severity": SeverityLevel.INFO,
-                        "desc": f"Local server monitoring started on host {stats['hostname']}. CPU: {stats['cpu_percent']}%, RAM: {stats['memory_percent']}%, Disk: {stats['disk_percent']}%."
-                    })
                     self.startup_logged = True
                     
                 await self._evaluate_thresholds(stats)

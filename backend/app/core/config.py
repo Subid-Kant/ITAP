@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     VIEWER_PASSWORD: str = "ITAP@Viewer2025!"
 
     # ── CORS ────────────────────────────────────
-    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174"
 
     @property
     def cors_origins(self) -> List[str]:
