@@ -11,6 +11,7 @@ python-multipart>=0.0.9
 
 # ── Database ─────────────────────────────────
 sqlalchemy>=2.0.31
+greenlet>=3.0.0            # Required by SQLAlchemy async engine
 aiosqlite>=0.20.0          # SQLite async driver (dev/demo)
 asyncpg>=0.29.0            # PostgreSQL async driver (production)
 alembic>=1.13.1
@@ -39,3 +40,4 @@ aiosmtplib>=3.0.1          # Async SMTP (optional, for production email)
 
 # ── Utils ────────────────────────────────────
 jinja2>=3.1.4
+psutil>=5.9.0              # System/process monitoring
