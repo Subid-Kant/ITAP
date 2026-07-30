@@ -14,7 +14,9 @@ from fastapi.exceptions import RequestValidationError
 
 from app.core.config import settings
 from app.core.middleware import SecurityHeadersMiddleware, RequestIDMiddleware, RateLimitMiddleware
-from app.db.database import init_db
+from app.db.database import init_db, async_session_factory
+from sqlalchemy import update
+from app.models.models import Target, Scan, Threat, Incident, AnomalyDetection
 from app.api.routes.api import router as api_router
 from app.api.routes.ws import manager as ws_manager
 from app.services.monitoring.server_monitor import server_monitor
@@ -40,6 +42,17 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     logger.info("✓ Database initialized and schema synchronized")
+    
+    # Clean-slate startup: archive any lingering active records
+    async with async_session_factory() as db:
+        await db.execute(update(Target).where(Target.is_archived == False).values(is_archived=True))
+        await db.execute(update(Scan).where(Scan.is_archived == False).values(is_archived=True))
+        await db.execute(update(Threat).where(Threat.is_archived == False).values(is_archived=True))
+        await db.execute(update(Incident).where(Incident.is_archived == False).values(is_archived=True))
+        await db.execute(update(AnomalyDetection).where(AnomalyDetection.is_archived == False).values(is_archived=True))
+        await db.commit()
+    logger.info("✓ Database cleaned for new session (old data archived)")
+
     logger.info(f"✓ CORS allowed origins: {settings.cors_origins}")
     logger.info(f"✓ Rate limit: {settings.RATE_LIMIT_REQUESTS} req/{settings.RATE_LIMIT_WINDOW_SECONDS}s per IP")
     logger.info("✓ Security middleware: headers, request-ID, rate-limiter")

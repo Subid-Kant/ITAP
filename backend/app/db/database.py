@@ -27,7 +27,18 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 
+from sqlalchemy import text
+
 async def init_db():
     """Initialize database tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+        # Add is_archived column to existing tables if they don't have it
+        tables = ["targets", "scans", "threats", "incidents", "anomaly_detections"]
+        for table in tables:
+            try:
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN is_archived BOOLEAN DEFAULT FALSE"))
+            except Exception as e:
+                # Column likely already exists
+                pass

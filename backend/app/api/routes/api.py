@@ -6,7 +6,7 @@ Includes JWT authentication, pagination, WebSocket broadcasts, and PDF report ge
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import uuid
@@ -742,39 +742,45 @@ async def get_dashboard_stats(
     current_user: dict = Depends(get_current_user),
 ):
     """Comprehensive dashboard statistics for the SOC analyst view."""
-    targets_count = (await db.execute(select(func.count(Target.id)))).scalar() or 0
+    targets_count = (await db.execute(select(func.count(Target.id)).where(Target.is_archived == False))).scalar() or 0
     # To fix "phantom threats", active_threats should only count real scan threats, 
     # not the global feed which is populated into the incidents table.
     threats_count = (await db.execute(
-        select(func.count(Threat.id)).where(Threat.is_resolved == False)
+        select(func.count(Threat.id)).where(
+            and_(Threat.is_resolved == False, Threat.is_archived == False)
+        )
     )).scalar() or 0
     critical_count = (await db.execute(
         select(func.count(Threat.id)).where(
-            and_(Threat.severity == SeverityLevel.CRITICAL, Threat.is_resolved == False)
+            and_(Threat.severity == SeverityLevel.CRITICAL, Threat.is_resolved == False, Threat.is_archived == False)
         )
     )).scalar() or 0
     incidents_count = (await db.execute(
-        select(func.count(Incident.id)).where(Incident.status == DBIncidentStatus.OPEN)
+        select(func.count(Incident.id)).where(
+            and_(Incident.status == DBIncidentStatus.OPEN, Incident.is_archived == False)
+        )
     )).scalar() or 0
     # Real anomaly count (not random)
     anomaly_count = (await db.execute(
-        select(func.count(AnomalyDetection.id)).where(AnomalyDetection.is_anomalous == True)
+        select(func.count(AnomalyDetection.id)).where(
+            and_(AnomalyDetection.is_anomalous == True, AnomalyDetection.is_archived == False)
+        )
     )).scalar() or 0
 
     recent_threats_result = await db.execute(
-        select(Threat).order_by(Threat.detected_at.desc()).limit(10)
+        select(Threat).where(Threat.is_archived == False).order_by(Threat.detected_at.desc()).limit(10)
     )
     recent_threats = recent_threats_result.scalars().all()
 
     recent_incidents_result = await db.execute(
-        select(Incident).order_by(Incident.detected_at.desc()).limit(10)
+        select(Incident).where(Incident.is_archived == False).order_by(Incident.detected_at.desc()).limit(10)
     )
     recent_incidents = recent_incidents_result.scalars().all()
 
     severity_counts = {}
     for sev in SeverityLevel:
         count = (await db.execute(
-            select(func.count(Threat.id)).where(Threat.severity == sev)
+            select(func.count(Threat.id)).where(and_(Threat.severity == sev, Threat.is_archived == False))
         )).scalar() or 0
         severity_counts[sev.value] = count
 
@@ -1020,3 +1026,110 @@ RECOMMENDATIONS
         )
 
     return report_data
+
+
+# ─────────────────────────────────────────────
+# System & History
+# ─────────────────────────────────────────────
+
+@router.post("/system/new-session", tags=["System"])
+async def start_new_session(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_admin_role),
+):
+    """
+    Archive all active targets, scans, threats, and incidents so the dashboard starts fresh.
+    """
+    await db.execute(update(Target).where(Target.is_archived == False).values(is_archived=True))
+    await db.execute(update(Scan).where(Scan.is_archived == False).values(is_archived=True))
+    await db.execute(update(Threat).where(Threat.is_archived == False).values(is_archived=True))
+    await db.execute(update(Incident).where(Incident.is_archived == False).values(is_archived=True))
+    await db.execute(update(AnomalyDetection).where(AnomalyDetection.is_archived == False).values(is_archived=True))
+    
+    await db.commit()
+    
+    await ws_manager.broadcast_system_event(
+        "info", "New Session Started",
+        detail=f"Previous data archived by {current_user.get('sub', 'system')}"
+    )
+    return {"status": "success", "message": "All active data has been safely archived. Starting fresh session."}
+
+
+@router.get("/history/summary", tags=["System"])
+async def get_history_summary(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get a summary of historical/archived targets and their threat counts.
+    """
+    result = await db.execute(
+        select(Target).where(Target.is_archived == True).order_by(Target.created_at.desc())
+    )
+    archived_targets = result.scalars().all()
+    
+    history_list = []
+    for t in archived_targets:
+        # Get threats for this specific historical target
+        threats_count = (await db.execute(
+            select(func.count(Threat.id)).where(Threat.target_id == t.id)
+        )).scalar() or 0
+        
+        scans_count = (await db.execute(
+            select(func.count(Scan.id)).where(Scan.target_id == t.id)
+        )).scalar() or 0
+        
+        history_list.append({
+            "target_id": t.id,
+            "domain": t.domain,
+            "ip_address": t.ip_address,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "threats_count": threats_count,
+            "scans_count": scans_count,
+        })
+        
+    return {"history": history_list}
+
+
+@router.get("/history/target/{target_id}", tags=["System"])
+async def get_history_target_details(
+    target_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get full detailed threats and scans for a specific archived target.
+    """
+    # Verify it exists
+    target = (await db.execute(select(Target).where(Target.id == target_id))).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+        
+    scans = (await db.execute(select(Scan).where(Scan.target_id == target_id))).scalars().all()
+    threats = (await db.execute(select(Threat).where(Threat.target_id == target_id))).scalars().all()
+    
+    return {
+        "target": {
+            "domain": target.domain,
+            "ip_address": target.ip_address,
+            "created_at": target.created_at.isoformat() if target.created_at else None,
+            "is_archived": target.is_archived,
+        },
+        "scans": [
+            {
+                "id": s.id,
+                "type": s.scan_type,
+                "status": s.status,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "risk_score": s.reputation_score,
+            } for s in scans
+        ],
+        "threats": [
+            {
+                "id": th.id,
+                "title": th.title,
+                "severity": th.severity.value if hasattr(th.severity, "value") else str(th.severity),
+                "detected_at": th.detected_at.isoformat() if th.detected_at else None,
+            } for th in threats
+        ]
+    }

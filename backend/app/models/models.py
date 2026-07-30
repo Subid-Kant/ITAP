@@ -47,6 +47,7 @@ class Target(Base):
     ip_address = Column(String(45), nullable=True)
     organization = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
+    is_archived = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -68,6 +69,7 @@ class Scan(Base):
     open_ports = Column(JSON, nullable=True)
     vulnerabilities = Column(JSON, nullable=True)
     reputation_score = Column(Float, nullable=True)
+    is_archived = Column(Boolean, default=False)
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
@@ -104,6 +106,7 @@ class ThreatPrediction(Base):
     time_window_hours = Column(Integer, default=72)
     features_used = Column(JSON, nullable=True)
     model_version = Column(String(20), default="1.0")
+    is_archived = Column(Boolean, default=False)
     predicted_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
 
@@ -120,6 +123,7 @@ class AnomalyDetection(Base):
     features = Column(JSON, nullable=True)
     reconstruction_error = Column(Float, nullable=True)
     pattern_fingerprint = Column(String(128), nullable=True)  # "Threat DNA"
+    is_archived = Column(Boolean, default=False)
     detected_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -159,6 +163,7 @@ class Threat(Base):
     source_longitude = Column(Float, nullable=True)
 
     is_resolved = Column(Boolean, default=False)
+    is_archived = Column(Boolean, default=False)
     detected_at = Column(DateTime, default=datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
 
@@ -197,6 +202,8 @@ class Incident(Base):
     # Alerts
     alert_sent = Column(Boolean, default=False)
     alert_channels = Column(JSON, nullable=True)  # ["email", "webhook", "slack"]
+
+    is_archived = Column(Boolean, default=False)
 
     target = relationship("Target", back_populates="incidents")
     threat = relationship("Threat", back_populates="incidents")

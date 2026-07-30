@@ -20,6 +20,8 @@ const NAV_ITEMS = [
   { section: 'Response' },
   { id: 'playbooks', label: 'Playbooks', icon: BookOpen },
   { id: 'reports', label: 'Reports', icon: FileText },
+  { section: 'System' },
+  { id: 'history', label: 'History', icon: FileText },
 ];
 
 export default function Sidebar({ activeView, setActiveView, stats, user, onLogout }) {

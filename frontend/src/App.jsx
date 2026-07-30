@@ -15,10 +15,12 @@ import SecurityPostureView from './components/SecurityPostureView';
 import IOCWorkbench from './components/IOCWorkbench';
 import ReportsView from './components/ReportsView';
 import LoginView from './components/LoginView';
+import HistoryView from './components/HistoryView';
 import ToastProvider, { useToast } from './components/ToastNotification';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { WebSocketProvider } from './hooks/useWebSocket';
 import { useDashboard } from './hooks/useDashboard';
+import { api } from './services/api';
 
 function AppContent() {
   const [activeView, setActiveView] = useState('dashboard');
@@ -45,6 +47,19 @@ function AppContent() {
     return <LoginView />;
   }
 
+  const handleNewSession = async () => {
+    if (!window.confirm('Are you sure you want to archive current data and start a new session?')) return;
+    try {
+      await api.post('/api/v1/system/new-session');
+      addToast('New session started. Old data archived to History.', 'success', 5000);
+      refresh();
+      setActiveView('dashboard');
+    } catch (err) {
+      console.error(err);
+      addToast('Failed to start new session', 'danger', 5000);
+    }
+  };
+
   const renderView = () => {
     switch (activeView) {
       case 'dashboard':   return <DashboardView stats={stats} isLive={isLive} />;
@@ -60,6 +75,7 @@ function AppContent() {
       case 'playbooks':   return <PlaybookView />;
       case 'ioc':         return <IOCWorkbench />;
       case 'reports':     return <ReportsView />;
+      case 'history':     return <HistoryView />;
       default:            return <SecurityPostureView stats={stats} />;
     }
   };
@@ -79,6 +95,7 @@ function AppContent() {
             activeView={activeView}
             onRefresh={refresh}
             onScan={() => setActiveView('scanner')}
+            onNewSession={handleNewSession}
             isLive={isLive}
             user={user}
           />

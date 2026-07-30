@@ -12,9 +12,10 @@ const VIEW_TITLES = {
   killchain: ['Kill Chain Analysis', 'Attack progression tracking'],
   geomap: ['Threat Geolocation', 'Global attack source map'],
   playbooks: ['Response Playbooks', 'AI-generated remediation guides'],
+  history: ['System History', 'Past scan sessions and threat archives'],
 };
 
-export default function Header({ activeView, onRefresh, onScan }) {
+export default function Header({ activeView, onRefresh, onScan, onNewSession }) {
   const [title, subtitle] = VIEW_TITLES[activeView] || ['ITAP', 'Integrated Threat Assessment Platform'];
   return (
     <header className="header">
@@ -30,6 +31,9 @@ export default function Header({ activeView, onRefresh, onScan }) {
         </button>
         <button className="header-btn" onClick={onRefresh} title="Refresh data">
           <RefreshCw size={14} /> Refresh
+        </button>
+        <button className="header-btn" onClick={onNewSession} title="Archive current data and start fresh">
+          <RefreshCw size={14} /> New Session
         </button>
         <button className="header-btn primary" onClick={onScan}>
           <Scan size={14} /> New Scan
