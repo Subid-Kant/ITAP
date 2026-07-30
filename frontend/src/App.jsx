@@ -22,8 +22,8 @@ import { useDashboard } from './hooks/useDashboard';
 
 function AppContent() {
   const [activeView, setActiveView] = useState('dashboard');
-  const { stats, loading, refresh, isLive } = useDashboard();
   const { isAuthenticated, user, logout } = useAuth();
+  const { stats, loading, refresh, isLive } = useDashboard(isAuthenticated);
   const { addToast } = useToast();
 
   const handleWSEvent = useCallback((event) => {

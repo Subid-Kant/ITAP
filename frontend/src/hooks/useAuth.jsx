@@ -30,7 +30,12 @@ export function AuthProvider({ children }) {
       setUser(data.user);
       return true;
     } catch (e) {
-      setError('Invalid credentials. Please try again.');
+      const msg = e?.message || '';
+      if (msg.toLowerCase().includes('too many')) {
+        setError('Too many attempts. Please wait a moment and try again.');
+      } else {
+        setError('Invalid credentials. Please try again.');
+      }
       return false;
     } finally {
       setLoading(false);

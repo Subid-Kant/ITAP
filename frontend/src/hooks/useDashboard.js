@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../api';
 
-export function useDashboard() {
+export function useDashboard(isAuthenticated = false) {
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const intervalRef = useRef(null);
 
   const refresh = useCallback(async () => {
+    if (!isAuthenticated) return;
     try {
       setLoading(true);
       const data = await api.getDashboardStats();
@@ -22,14 +23,15 @@ export function useDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     refresh();
-    // Auto-refresh every 15 seconds for live data
-    intervalRef.current = setInterval(refresh, 15000);
+    // Auto-refresh every 30 seconds for live data
+    intervalRef.current = setInterval(refresh, 30000);
     return () => clearInterval(intervalRef.current);
-  }, [refresh]);
+  }, [refresh, isAuthenticated]);
 
   return { stats, loading, refresh, isLive };
 }

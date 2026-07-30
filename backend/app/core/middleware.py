@@ -92,11 +92,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return request.client.host if request.client else "unknown"
 
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health check and docs
+        # Skip rate limiting for health check, docs, and localhost (dev)
         if request.url.path in ("/health", "/docs", "/redoc", "/openapi.json"):
             return await call_next(request)
 
         client_ip = self._get_client_ip(request)
+        # Bypass rate limiting for localhost in development
+        if client_ip in ("127.0.0.1", "::1", "localhost"):
+            return await call_next(request)
+
         now = time.time()
         window_start = now - self.window_seconds
 
