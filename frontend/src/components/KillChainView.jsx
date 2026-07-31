@@ -36,11 +36,11 @@ export default function KillChainView({ stats }) {
       }
     }
     loadKillChain();
-  }, [currentPhase]);
+  }, [currentPhase, stats?.timestamp]);
 
   return (
     <div className="fade-in">
-      {stats?.total_targets === 0 && stats?.active_threats === 0 ? (
+      {(!stats || stats.active_threats === 0) ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '60vh', textAlign: 'center' }}>
           <div style={{ background: 'rgba(55,138,221,0.1)', padding: 30, borderRadius: '50%', marginBottom: 20 }}>
             <Target size={48} color="#378ADD" />

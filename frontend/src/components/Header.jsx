@@ -1,4 +1,5 @@
 import { RefreshCw, Scan, Download } from 'lucide-react';
+import { api } from '../api';
 
 const VIEW_TITLES = {
   posture: ['Security Posture', 'AI-driven executive intelligence summary'],
@@ -26,7 +27,7 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession }) 
         </div>
       </div>
       <div className="header-right">
-        <button className="header-btn" onClick={() => alert('ITAP: Generating Security Intelligence PDF Report...')} title="Export Report">
+        <button className="header-btn" onClick={() => api.downloadReport(7)} title="Export Report">
           <Download size={14} /> Export PDF
         </button>
         <button className="header-btn" onClick={onRefresh} title="Refresh data">
