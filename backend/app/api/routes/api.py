@@ -33,6 +33,7 @@ from app.services.threat_intel.threat_intel_service import KillChainEngine, MITR
 from app.services.response.response_service import PlaybookGenerator
 from app.services.monitoring.server_monitor import server_monitor
 from app.services.monitoring.global_threat_feed import global_threat_feed
+from app.services.monitoring.machine_scanner import machine_scanner
 from app.core.security import authenticate_user, create_access_token, create_refresh_token, get_current_user
 from app.api.routes.ws import manager as ws_manager
 
@@ -731,6 +732,17 @@ async def get_global_threats(current_user: dict = Depends(get_current_user)):
     """Get live global threats from NVD and CISA feeds."""
     return await global_threat_feed.get_current_threats()
 
+@router.get("/monitoring/machine-scan", tags=["Monitoring"])
+async def get_machine_scan(current_user: dict = Depends(get_current_user)):
+    """
+    Get real-time machine threat analysis:
+    - Host public IP with city-level geolocation
+    - All active network connections geolocated and classified
+    - Risk score (0-100)
+    - Open listening ports
+    - OS fingerprint
+    """
+    return await machine_scanner.get_result()
 
 # ─────────────────────────────────────────────
 # Layer 5 — Dashboard

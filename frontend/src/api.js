@@ -151,6 +151,7 @@ export const api = {
   // ── Monitoring ───────────────────────────────────────────
   getServerStatus: () => request('/monitoring/server-status'),
   getGlobalThreats: () => request('/monitoring/global-threats'),
+  getMachineScan: () => request('/monitoring/machine-scan'),
 
   // ── Reports ──────────────────────────────────────────────
   generateReport: (format = 'json', days = 7) =>

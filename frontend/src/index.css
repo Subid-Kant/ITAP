@@ -4,7 +4,7 @@
    ═══════════════════════════════════════════════════════════ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
+@import 'leaflet/dist/leaflet.css';
 :root {
   /* Core Colors - Deep Space Theme */
   --bg-primary: #05070a;
@@ -690,6 +690,36 @@ body::before {
 .map-dot.critical { background: var(--severity-critical); color: var(--severity-critical); }
 .map-dot.high { background: var(--severity-high); color: var(--severity-high); }
 .map-dot.medium { background: var(--severity-medium); color: var(--severity-medium); }
+.map-dot.low { background: var(--severity-low); color: var(--severity-low); }
+.map-dot.info { background: var(--accent-blue); color: var(--accent-blue); }
+
+/* Leaflet Custom Overrides */
+.leaflet-container {
+  background: var(--bg-tertiary) !important;
+  font-family: 'Inter', sans-serif;
+}
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: rgba(6,9,16,0.97) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-glass);
+  backdrop-filter: blur(8px);
+}
+.leaflet-popup-content {
+  margin: 14px 16px;
+}
+.leaflet-div-icon {
+  background: transparent;
+  border: none;
+}
+.leaflet-control-zoom a {
+  background-color: var(--bg-card) !important;
+  color: var(--text-secondary) !important;
+  border: 1px solid var(--border-subtle) !important;
+}
+.leaflet-control-zoom a:hover {
+  background-color: var(--bg-card-hover) !important;
+  color: var(--text-primary) !important;
+}
 
 /* ─── Timeline ─── */
 .timeline {

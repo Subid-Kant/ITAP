@@ -21,6 +21,7 @@ from app.api.routes.api import router as api_router
 from app.api.routes.ws import manager as ws_manager
 from app.services.monitoring.server_monitor import server_monitor
 from app.services.monitoring.global_threat_feed import global_threat_feed
+from app.services.monitoring.machine_scanner import machine_scanner
 
 # ── Logging Configuration ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -67,6 +68,8 @@ async def lifespan(app: FastAPI):
     # Start background monitors
     await server_monitor.start()
     await global_threat_feed.start()
+    await machine_scanner.start()
+    logger.info("✓ Machine Scanner: host IP detection + network threat analysis started")
     
     logger.info("=" * 70)
 
@@ -75,6 +78,7 @@ async def lifespan(app: FastAPI):
     # Stop background monitors gracefully
     await server_monitor.stop()
     await global_threat_feed.stop()
+    await machine_scanner.stop()
     
     logger.info("ITAP — Graceful shutdown complete")
 
