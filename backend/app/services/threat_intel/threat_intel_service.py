@@ -393,10 +393,22 @@ class KillChainEngine:
 
         completed_phases = KILL_CHAIN_ORDER[: current_idx + 1]
 
+        # Build completed phase details
+        completed_phase_details = []
+        for phase in completed_phases:
+            details = KillChainEngine._get_phase_details(phase)
+            completed_phase_details.append({
+                "phase": phase,
+                "tactic_id": MITRE_ATTACK_MATRIX.get(phase, {}).get("id", ""),
+                "status": "current" if phase == current_phase else "completed",
+                **details
+            })
+
         predicted_next_phases = []
-        for i, phase in enumerate(KILL_CHAIN_ORDER[current_idx + 1 :], 1):
+        for i, phase in enumerate(KILL_CHAIN_ORDER[current_idx + 1:], 1):
             # Probability decreases with each step, with non-linear decay
             base_prob = 0.92 * (0.88 ** i)
+            details = KillChainEngine._get_phase_details(phase)
             predicted_next_phases.append({
                 "phase": phase,
                 "probability": round(max(base_prob, 0.05), 3),
@@ -405,40 +417,253 @@ class KillChainEngine:
                     t["name"]
                     for t in MITRE_ATTACK_MATRIX.get(phase, {}).get("techniques", [])[:3]
                 ],
-                "defensive_action": KillChainEngine._recommend_action(phase),
+                "defensive_action": details.get("summary", ""),
+                "commands": details.get("commands", []),
+                "indicators": details.get("indicators", []),
+                "mitigations": details.get("mitigations", []),
+                "priority": details.get("priority", "MEDIUM"),
             })
+
+        recommended_action = KillChainEngine._recommend_action(current_phase)
+        root_cause = None
+        current_phase_details = KillChainEngine._get_phase_details(current_phase)
+
+        if threat_data:
+            if threat_data.get("root_cause"):
+                root_cause = threat_data["root_cause"]
+            remediation = threat_data.get("remediation")
+            if remediation and isinstance(remediation, list) and len(remediation) > 0:
+                recommended_action = remediation[0].get("action", recommended_action)
+            elif remediation and isinstance(remediation, str):
+                recommended_action = remediation
 
         return {
             "current_phase": current_phase,
             "current_phase_index": current_idx,
             "total_phases": len(KILL_CHAIN_ORDER),
             "completed_phases": completed_phases,
+            "completed_phase_details": completed_phase_details,
             "predicted_next_phases": predicted_next_phases,
             "most_likely_next": predicted_next_phases[0] if predicted_next_phases else None,
-            "recommended_action": KillChainEngine._recommend_action(current_phase),
+            "recommended_action": recommended_action,
+            "root_cause": root_cause,
+            "current_phase_details": current_phase_details,
             "attack_progression_pct": round((current_idx + 1) / len(KILL_CHAIN_ORDER) * 100, 1),
             "dwell_time_estimate_days": max(1, 14 - current_idx * 1),
         }
 
+
+    # Detailed per-phase action map: each phase has commands, indicators, and priority
+    PHASE_ACTIONS: Dict[str, Dict] = {
+        "Reconnaissance": {
+            "summary": "Attacker is actively mapping your infrastructure. Block probing now.",
+            "priority": "HIGH",
+            "commands": [
+                "sudo ufw deny from any to any port 22 proto tcp  # Block SSH brute-force probes",
+                "sudo fail2ban-client start  # Enable automated IP banning on repeated scans",
+                "sudo iptables -A INPUT -m recent --name scanners --rcheck --seconds 60 --hitcount 10 -j DROP",
+                "grep -i 'scan\\|nmap\\|masscan' /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c | sort -rn | head 20",
+            ],
+            "indicators": ["Unusual port sweep activity", "High volume of SYN packets from single IP", "Shodan/Censys fingerprinting requests"],
+            "mitigations": ["Deploy honeypots on unused ports", "Enable geo-IP rate limiting", "Monitor certificate transparency logs"],
+        },
+        "Resource Development": {
+            "summary": "Attacker is building infrastructure (domains, tools). Monitor newly registered assets.",
+            "priority": "MEDIUM",
+            "commands": [
+                "# Check newly registered domains similar to yours:",
+                "curl -s 'https://api.certstream.calidog.io/' | grep 'your-domain'",
+                "# Block known malicious AS ranges:",
+                "sudo ipset create malicious-asns hash:net && sudo ipset add malicious-asns 45.132.0.0/16",
+                "# Monitor for typosquatting:",
+                "whois newly-registered-lookalike.com | grep 'Creation Date'",
+            ],
+            "indicators": ["Look-alike domain registrations", "New SSL certs for similar hostnames", "Underground forum chatter"],
+            "mitigations": ["Register defensive domain variants", "Monitor certificate transparency logs", "Enable brand protection alerts"],
+        },
+        "Initial Access": {
+            "summary": "Attacker has attempted entry. Patch immediately and review all access logs.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo apt-get update && sudo apt-get upgrade -y  # Emergency patch all packages",
+                "grep '40[034]\\|500' /var/log/nginx/access.log | tail -100  # Find exploit attempts",
+                "sudo grep 'Failed password\\|Invalid user' /var/log/auth.log | tail -50",
+                "sudo last -n 50 | grep -v 'reboot\\|wtmp'  # Review recent login sessions",
+                "sudo netstat -tlnp | grep LISTEN  # Audit open ports",
+            ],
+            "indicators": ["Login failures spike", "404/500 errors from single IP", "Payload strings in URL params", "Unusual user agents"],
+            "mitigations": ["Enable MFA on all accounts immediately", "Deploy WAF rules", "Restrict admin panel by IP allowlist"],
+        },
+        "Execution": {
+            "summary": "Malicious code is running. Isolate affected systems and kill suspicious processes.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo ps auxf | grep -v 'root\\|nobody' | grep -E '(nc|ncat|bash|sh|python|perl|ruby)'",
+                "sudo lsof -i | grep ESTABLISHED | grep -v 'BROWSER\\|chrome'  # Unusual connections",
+                "sudo auditctl -a always,exit -F arch=b64 -S execve  # Enable exec auditing",
+                "sudo find /tmp /var/tmp /dev/shm -type f -executable 2>/dev/null  # Find staged payloads",
+                "sudo rkhunter --check --skip-keypress  # Rootkit check",
+            ],
+            "indicators": ["Unusual child processes from web server", "Base64 encoded strings in commands", "Unexpected cron jobs", "Script interpreters spawned by httpd/nginx"],
+            "mitigations": ["Enable AppArmor/SELinux mandatory access control", "Deploy EDR endpoint agent", "Restrict /tmp execution with noexec mount"],
+        },
+        "Persistence": {
+            "summary": "Attacker has planted a backdoor. Hunt and remove all persistence mechanisms.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo crontab -l && sudo cat /etc/cron.* && sudo ls /var/spool/cron/",
+                "sudo systemctl list-units --type=service --state=running | grep -v 'snap\\|systemd'",
+                "sudo find / -name '*.php' -newer /etc/passwd -mtime -7 2>/dev/null  # New web shells",
+                "sudo grep -r 'base64_decode\\|eval\\|system\\|exec' /var/www/html/ 2>/dev/null",
+                "sudo cat /etc/rc.local && sudo ls /etc/init.d/ && sudo cat ~/.bashrc",
+                "sudo find /home /root -name '.ssh' -exec cat {}/authorized_keys \\;",
+            ],
+            "indicators": ["New cron entries", "Unknown systemd services", "Modified ~/.bashrc or /etc/profile", "New SSH authorized_keys"],
+            "mitigations": ["Enable file integrity monitoring (AIDE/Tripwire)", "Audit all startup scripts", "Monitor registry run keys on Windows"],
+        },
+        "Privilege Escalation": {
+            "summary": "Attacker is attempting root/admin access. Enforce least privilege now.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo grep -v '^#' /etc/sudoers | grep -v '^$'  # Audit sudoers",
+                "sudo find / -perm -4000 -type f 2>/dev/null  # SUID binaries (privilege escalation vectors)",
+                "sudo find / -perm -2000 -type f 2>/dev/null  # SGID binaries",
+                "sudo ausearch -m AVC,USER_AVC -ts recent  # SELinux/AppArmor denials",
+                "sudo grep 'sudo\\|su ' /var/log/auth.log | tail -50",
+                "sudo id && sudo whoami  # Verify current privilege context",
+            ],
+            "indicators": ["sudo invocations from unexpected users", "SUID binary execution", "UAC bypass attempts", "Token impersonation"],
+            "mitigations": ["Apply least-privilege principle", "Patch local privilege escalation CVEs", "Enable PAM sudo logging"],
+        },
+        "Defense Evasion": {
+            "summary": "Attacker is disabling your defenses. Harden logging and deploy canary traps.",
+            "priority": "HIGH",
+            "commands": [
+                "sudo systemctl status auditd && sudo systemctl restart auditd  # Ensure audit daemon is running",
+                "sudo tail -f /var/log/audit/audit.log | grep -E 'SYSCALL|EXECVE'",
+                "sudo chattr +i /var/log/syslog /var/log/auth.log  # Make logs immutable",
+                "sudo rsyslog -N1  # Verify remote syslog config",
+                "sudo find / -name '*.log' -newer /etc/passwd -mtime -1 2>/dev/null | head 20  # Recently modified logs",
+                "sudo aureport --summary  # Get security event summary",
+            ],
+            "indicators": ["Log entries deleted or truncated", "Audit daemon stopped unexpectedly", "Antivirus disabled", "Process injection detected"],
+            "mitigations": ["Ship logs to remote SIEM in real-time", "Deploy canary files in sensitive dirs", "Enable immutable logging"],
+        },
+        "Credential Access": {
+            "summary": "Attacker is stealing credentials. Reset all passwords and deploy credential guard.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo grep 'Failed password\\|authentication failure' /var/log/auth.log | awk '{print $11}' | sort | uniq -c | sort -rn",
+                "sudo lastb | head -30  # Failed login attempts",
+                "sudo strings /proc/*/mem 2>/dev/null | grep -E 'password|passwd' | head 20",
+                "# Force password reset for all non-system users:",
+                "sudo awk -F: '$3>=1000{print $1}' /etc/passwd | xargs -I{} sudo passwd -e {}",
+                "sudo cat /etc/shadow | awk -F: '$2!=\"*\" && $2!=\"!\" {print $1}'  # Active password accounts",
+            ],
+            "indicators": ["Authentication failure spikes", "LSASS memory reads", "Mimikatz signatures", "NTLM relay attempts"],
+            "mitigations": ["Enable credential guard on Windows", "Enforce MFA on all accounts", "Deploy honeypot credentials"],
+        },
+        "Discovery": {
+            "summary": "Attacker is mapping your internal network. Deploy deception and restrict lateral queries.",
+            "priority": "HIGH",
+            "commands": [
+                "sudo ss -tlnp && sudo netstat -rn  # Internal network topology",
+                "sudo tcpdump -i any -nn 'port 445 or port 389 or port 636' -c 100  # SMB/LDAP scans",
+                "sudo tail -f /var/log/syslog | grep -E 'nmap|masscan|scanner'",
+                "# Deploy internal honeypot decoys:",
+                "sudo python3 -m http.server 9999 &  # Canary service - alert if accessed",
+                "sudo arp -n && sudo arp-scan --localnet 2>/dev/null | head 30",
+            ],
+            "indicators": ["LDAP enumeration queries", "WMI mass-query activity", "BloodHound-like AD collection", "Net commands run from unusual hosts"],
+            "mitigations": ["Deploy deception network assets", "Monitor lateral LDAP/WMI queries", "Restrict internal DNS zone transfers"],
+        },
+        "Lateral Movement": {
+            "summary": "Attacker is moving between hosts. Micro-segment and isolate compromised systems NOW.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo tcpdump -i any 'port 22 or port 3389 or port 445' -c 200 -nn  # SSH/RDP/SMB laterals",
+                "sudo last -n 30  # Recent logins across system",
+                "# Isolate suspected host immediately:",
+                "sudo iptables -I INPUT -s <SUSPECT_IP> -j DROP && sudo iptables -I OUTPUT -d <SUSPECT_IP> -j DROP",
+                "sudo grep -i 'new session\\|opened for user' /var/log/auth.log | tail -30",
+                "sudo find /home -name '.bash_history' -exec tail -20 {} \\;",
+            ],
+            "indicators": ["RDP/SSH connections between internal hosts", "Pass-the-Hash/Ticket events", "SMB admin share connections", "Internal spearphishing"],
+            "mitigations": ["Micro-segment network with VLANs", "Enforce privileged access workstations (PAW)", "Block inter-host SMB traffic"],
+        },
+        "Collection": {
+            "summary": "Attacker is staging data for exfiltration. Enable DLP and locate staged archives.",
+            "priority": "HIGH",
+            "commands": [
+                "sudo find / -name '*.zip' -o -name '*.tar.gz' -o -name '*.7z' -newer /etc/passwd -mtime -1 2>/dev/null",
+                "sudo inotifywait -m -r /var/www /home -e access,modify,create 2>/dev/null | grep -E '\\.sql|\\.csv|\\.key'",
+                "sudo du -sh /tmp/* /var/tmp/* 2>/dev/null | sort -rh | head 20  # Large staged files",
+                "sudo lsof | grep -E '\\.sql|\\.csv|\\.db|\\.key' | head 20  # DB/key file access",
+                "sudo ausearch -m PATH -k data-collection 2>/dev/null | tail 20",
+            ],
+            "indicators": ["Large archive creation in /tmp", "Database dump commands", "Mass file read events", "Clipboard monitoring"],
+            "mitigations": ["Enable DLP rules on outbound traffic", "Monitor sensitive file access patterns", "Encrypt databases at rest"],
+        },
+        "Command and Control": {
+            "summary": "Attacker has active C2 channel. Block outbound and sinkhole malicious domains.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo ss -tunap | grep ESTABLISHED | awk '{print $5}' | cut -d: -f1 | sort | uniq -c | sort -rn | head 20",
+                "sudo tcpdump -i any -nn 'port 443 or port 8080 or port 53' -A -c 50 | grep -E 'GET|POST|Host:'",
+                "# Block outbound except whitelisted IPs:",
+                "sudo iptables -P OUTPUT DROP && sudo iptables -A OUTPUT -d 8.8.8.8 -j ACCEPT  # Emergency lockdown",
+                "sudo cat /etc/hosts | grep -v '^#'  # Check for DNS hijacking",
+                "dig +short <suspicious_domain> @1.1.1.1  # Resolve C2 domain",
+            ],
+            "indicators": ["Periodic beaconing at fixed intervals", "DNS TXT record queries", "TLS to non-standard ports", "Base64-encoded POST bodies"],
+            "mitigations": ["Deploy DNS sinkhole for known C2 domains", "Inspect and filter outbound TLS", "Block non-whitelisted egress ports"],
+        },
+        "Exfiltration": {
+            "summary": "Data is being stolen. Kill outbound connections, identify what was taken.",
+            "priority": "CRITICAL",
+            "commands": [
+                "sudo iftop -n -B  # Real-time bandwidth by host",
+                "sudo tcpdump -i eth0 -nn 'not src net 10.0.0.0/8 and not src net 192.168.0.0/16' -c 200 | grep -E 'length [0-9]{4,}'",
+                "# Block all outbound immediately:",
+                "sudo iptables -P OUTPUT DROP  # EMERGENCY: drops all outbound",
+                "sudo netstat -s | grep 'segments sent'  # Check total data sent",
+                "sudo journalctl -u networking --since '1 hour ago' | grep -i 'send\\|upload\\|transfer'",
+            ],
+            "indicators": ["Sustained high outbound bandwidth", "Large HTTP POST to external IPs", "Cloud storage API calls", "DNS exfiltration (long TXT queries)"],
+            "mitigations": ["Monitor outbound data volumes with DLP", "Restrict cloud upload destinations", "Set egress firewall alerts on large transfers"],
+        },
+        "Impact": {
+            "summary": "System integrity at risk. Isolate NOW, activate incident response, restore from backup.",
+            "priority": "CRITICAL",
+            "commands": [
+                "# IMMEDIATE: Isolate affected host",
+                "sudo systemctl stop networking  # OR: unplug network cable",
+                "sudo shutdown -h +0  # If encryption in progress, halt immediately",
+                "# Activate backup restore:",
+                "sudo rsync -avz /backups/latest/ /var/www/html/  # Restore from clean backup",
+                "sudo find / -name '*.encrypted' -o -name '*.locked' -o -name '*.crypt' 2>/dev/null | wc -l",
+                "sudo strings /proc/*/mem 2>/dev/null | grep -i 'ransom\\|bitcoin\\|payment' | head 10",
+            ],
+            "indicators": ["Files renamed with .locked/.crypt extension", "System ransom note dropped", "Service stop/disable commands", "MBR/boot sector writes"],
+            "mitigations": ["Activate BCP and DR plan immediately", "Restore from offline backups", "Report to CERT/law enforcement"],
+        },
+    }
+
     @staticmethod
     def _recommend_action(phase: str) -> str:
-        actions = {
-            "Reconnaissance": "Deploy honeypots; block scanning IPs; enable geo-based rate limiting",
-            "Resource Development": "Monitor certificate transparency logs; track newly registered domains",
-            "Initial Access": "Patch public-facing apps; enforce MFA; update email security filters",
-            "Execution": "Enable application allowlisting; deploy EDR; restrict script interpreters",
-            "Persistence": "Audit scheduled tasks, services, and registry run keys; enable change monitoring",
-            "Privilege Escalation": "Apply least privilege; patch local vulnerabilities; monitor sudo/UAC events",
-            "Defense Evasion": "Enable enhanced logging; deploy canary files; monitor process injection",
-            "Credential Access": "Deploy credential guard; enforce strong MFA; monitor auth failure spikes",
-            "Discovery": "Monitor lateral LDAP/WMI queries; deploy deception assets",
-            "Lateral Movement": "Micro-segment network; monitor RDP/SMB/SSH; enforce PAM solutions",
-            "Collection": "Enable DLP; monitor unusual file access; encrypt data at rest",
-            "Command and Control": "Block known C2 infra; deploy DNS sinkholes; inspect outbound TLS",
-            "Exfiltration": "Monitor outbound data volumes; restrict cloud uploads; enforce DLP alerts",
-            "Impact": "Test backups immediately; activate BCP; isolate affected systems",
-        }
-        return actions.get(phase, "Review and assess the situation immediately")
+        phase_data = KillChainEngine.PHASE_ACTIONS.get(phase, {})
+        return phase_data.get("summary", "Review and assess the situation immediately")
+
+    @staticmethod
+    def _get_phase_details(phase: str) -> Dict:
+        """Return full structured details for a given phase."""
+        return KillChainEngine.PHASE_ACTIONS.get(phase, {
+            "summary": "Assess threat and take appropriate action",
+            "priority": "MEDIUM",
+            "commands": [],
+            "indicators": [],
+            "mitigations": [],
+        })
 
 
 class ThreatDNAFingerprinter:

@@ -50,7 +50,7 @@ function AppContent() {
   const handleNewSession = async () => {
     if (!window.confirm('Are you sure you want to archive current data and start a new session?')) return;
     try {
-      await api.post('/api/v1/system/new-session');
+      await api.newSession();
       addToast('New session started. Old data archived to History.', 'success', 5000);
       refresh();
       setActiveView('dashboard');

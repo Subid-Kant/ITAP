@@ -449,20 +449,61 @@ class LSTMPredictor:
         ],
     }
 
-    @staticmethod
-    def _get_root_cause_info(attack_type: str, cve_desc: str = "") -> Dict[str, Any]:
+    @classmethod
+    def _get_root_cause_info(cls, attack_type: str, cve_desc: str = "", target_domain: str = "", osint_data: dict = None) -> Dict[str, Any]:
         """Return root cause, attack vector detail, affected components, and remediation for an attack type."""
-        db_entry = LSTMPredictor.ROOT_CAUSE_DB.get(attack_type, LSTMPredictor.ROOT_CAUSE_DB["Exploitation Attempt"])
-        remediation = LSTMPredictor.REMEDIATION_DB.get(attack_type, LSTMPredictor.REMEDIATION_DB["Exploitation Attempt"])
+        import copy
+        db_entry = copy.deepcopy(cls.ROOT_CAUSE_DB.get(attack_type, cls.ROOT_CAUSE_DB["Exploitation Attempt"]))
+        remediation = copy.deepcopy(cls.REMEDIATION_DB.get(attack_type, cls.REMEDIATION_DB["Exploitation Attempt"]))
 
         root_cause = db_entry["root_cause"]
+        attack_vector = db_entry["attack_vector_detail"]
+        
         # Prepend actual CVE description if available for specificity
         if cve_desc:
             root_cause = f"CVE Details: {cve_desc[:300]}\n\nRoot Cause Analysis: {root_cause}"
 
+        # Procedurally inject OSINT data if available to make it hyper-specific
+        if osint_data and target_domain:
+            shodan = osint_data.get("sources", {}).get("shodan", {})
+            ip = shodan.get("ip", target_domain)
+            ports = shodan.get("ports", [])
+            services = shodan.get("services", [])
+            
+            port_str = f"ports {', '.join(map(str, ports))}" if ports else "exposed ports"
+            svc_str = ", ".join(set([s.get('product', '') for s in services if s.get('product')]))
+            
+            # Inject dynamic context into Root Cause
+            root_cause = root_cause.replace(
+                "exposed to the internet", f"exposed on {ip} across {port_str}"
+            ).replace("misconfigured application", f"misconfigured application running at {target_domain}")
+            
+            # Add dynamic technical details to Attack Vector
+            if ports:
+                target_port = ports[0]
+                attack_vector += (
+                    f"\n\nTechnical execution: Attacker initiates connection to {ip}:{target_port} "
+                    f"using tools like nmap/curl. The payload exploits the {svc_str or 'running'} service."
+                )
+            
+            # Inject hyper-specific code-level remediation steps
+            for step in remediation:
+                if ports:
+                    # Inject iptables/ufw rules dynamically for the specific ports
+                    if "firewall" in step["detail"].lower() or "block" in step["detail"].lower():
+                        step["detail"] += f" Execute: `sudo ufw deny {ports[0]}/tcp` or `iptables -A INPUT -p tcp --dport {ports[0]} -s 0.0.0.0/0 -j DROP`."
+            
+            # Ensure there is always a dynamic logging step
+            remediation.append({
+                "step": len(remediation) + 1,
+                "action": f"Enable deep packet inspection for {target_domain}",
+                "priority": "short-term",
+                "detail": f"Deploy Suricata/Zeek rules monitoring traffic to {ip} on {port_str}. Run: `tcpdump -i any host {ip} -w /var/log/pcap/threat.pcap`."
+            })
+
         return {
             "root_cause": root_cause,
-            "attack_vector_detail": db_entry["attack_vector_detail"],
+            "attack_vector_detail": attack_vector,
             "affected_components": db_entry["affected_components"],
             "remediation": remediation,
         }
@@ -528,7 +569,7 @@ class LSTMPredictor:
                 )
 
                 attack_type = LSTMPredictor._classify_attack(cve_desc)
-                rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc)
+                rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc, target_domain=domain, osint_data=osint_data)
 
                 # Enrich affected_components with Shodan service data if available
                 shodan_services = osint_data.get("sources", {}).get("shodan", {}).get("services", [])
@@ -571,7 +612,7 @@ class LSTMPredictor:
             adjusted_prob = env_adj * domain_factor
 
             if adjusted_prob > 0.25:
-                rca = LSTMPredictor._get_root_cause_info(attack_type)
+                rca = LSTMPredictor._get_root_cause_info(attack_type, target_domain=domain, osint_data=osint_data)
                 predictions.append({
                     "predicted_cve": None,
                     "predicted_attack_type": attack_type,

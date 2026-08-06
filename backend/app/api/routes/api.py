@@ -524,10 +524,41 @@ async def map_to_mitre(
 @router.post("/threat-intel/kill-chain", tags=["Threat Intelligence"])
 async def get_kill_chain(
     current_phase: str,
+    threat_id: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Reconstruct kill chain and predict next attack phases."""
-    return KillChainEngine.reconstruct_chain(current_phase)
+    threat_data = None
+    if threat_id:
+        result = await db.execute(select(Threat).where(Threat.id == threat_id))
+        threat = result.scalar_one_or_none()
+        if threat:
+            threat_data = {
+                "root_cause": threat.root_cause,
+                "remediation": threat.remediation,
+                "attack_vector_detail": threat.attack_vector_detail,
+                "cve_description": threat.cve_description,
+                "title": threat.title,
+                "affected_components": threat.affected_components
+            }
+            
+    if not threat_data:
+        # fallback to get the most recent active threat that matches the tactic
+        query = select(Threat).where(and_(Threat.is_resolved == False, Threat.mitre_tactic.ilike(f"%{current_phase.split(' ')[0]}%"))).order_by(Threat.detected_at.desc()).limit(1)
+        result = await db.execute(query)
+        threat = result.scalar_one_or_none()
+        if threat:
+            threat_data = {
+                "root_cause": threat.root_cause,
+                "remediation": threat.remediation,
+                "attack_vector_detail": threat.attack_vector_detail,
+                "cve_description": threat.cve_description,
+                "title": threat.title,
+                "affected_components": threat.affected_components
+            }
+
+    return KillChainEngine.reconstruct_chain(current_phase, threat_data)
 
 
 @router.post("/threat-intel/ioc-enrich", tags=["Threat Intelligence"])

@@ -74,6 +74,11 @@ async function request(path, options = {}, retries = 1) {
 }
 
 export const api = {
+  // ── Generic helpers ─────────────────────────────────────
+  get: (path, options = {}) => request(path, { ...options, method: 'GET' }),
+  post: (path, body, options = {}) =>
+    request(path, { ...options, method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+
   // ── Authentication ──────────────────────────────────────
   login: (username, password) =>
     request(`/auth/login?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`, { method: 'POST' }),
@@ -119,8 +124,13 @@ export const api = {
   getThreatActors: () => request('/mitre/threat-actors'),
   mapToMitre: (description, attackType = '') =>
     request(`/mitre/map?description=${encodeURIComponent(description)}&attack_type=${encodeURIComponent(attackType)}`, { method: 'POST' }),
-  getKillChain: (phase) =>
-    request(`/threat-intel/kill-chain?current_phase=${encodeURIComponent(phase)}`, { method: 'POST' }),
+  getKillChain: (phase, threatId = '') => {
+    let url = `/threat-intel/kill-chain?current_phase=${encodeURIComponent(phase)}`;
+    if (threatId) {
+      url += `&threat_id=${encodeURIComponent(threatId)}`;
+    }
+    return request(url, { method: 'POST' });
+  },
 
   // ── IOC ─────────────────────────────────────────────────
   enrichIOC: (indicator, type = 'domain') =>
@@ -152,6 +162,9 @@ export const api = {
   getServerStatus: () => request('/monitoring/server-status'),
   getGlobalThreats: () => request('/monitoring/global-threats'),
   getMachineScan: () => request('/monitoring/machine-scan'),
+
+  // ── System ───────────────────────────────────────────────
+  newSession: () => request('/system/new-session', { method: 'POST' }),
 
   // ── Reports ──────────────────────────────────────────────
   generateReport: (format = 'json', days = 7) =>

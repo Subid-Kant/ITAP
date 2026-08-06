@@ -17,7 +17,8 @@ export default function HistoryView() {
   const fetchHistory = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/api/v1/history/summary');
+      setError(null);
+      const res = await api.get('/history/summary');
       setHistoryList(res.history || []);
     } catch (err) {
       console.error('Failed to fetch history:', err);
@@ -31,7 +32,7 @@ export default function HistoryView() {
     setSelectedTargetId(targetId);
     try {
       setDetailsLoading(true);
-      const res = await api.get(`/api/v1/history/target/${targetId}`);
+      const res = await api.get(`/history/target/${targetId}`);
       setTargetDetails(res);
     } catch (err) {
       console.error('Failed to load target details:', err);
@@ -45,7 +46,17 @@ export default function HistoryView() {
   }
 
   if (error) {
-    return <div style={{ padding: 24, color: 'var(--danger)' }}>{error}</div>;
+    return (
+      <div style={{ padding: 24, color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: 12 }}>
+        {error}
+        <button
+          onClick={fetchHistory}
+          style={{ marginLeft: 12, padding: '4px 12px', background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 6, cursor: 'pointer', color: 'var(--text-main)', fontSize: 13 }}
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   // Detailed View

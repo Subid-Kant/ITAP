@@ -25,28 +25,28 @@ class LocalLLMService:
     async def generate_prediction(domain: str, osint_data: dict) -> List[Dict[str, Any]]:
         """
         Prompt the local Llama 3 model to predict threats based on OSINT data.
-        Falls back to Statistical ML Engine (LSTMPredictor) if LLM is unreachable.
-        All predictions include root_cause, attack_vector_detail, affected_components,
-        and a structured remediation playbook.
+        Falls back to Statistical ML Engine (LSTMPredictor) if LLM is unreachable or fails.
         """
+        import re
+
         if not await LocalLLMService.is_ollama_available():
             logger.warning("Ollama LLM unreachable. Falling back to Statistical ML Engine (LSTMPredictor).")
             from app.services.ml.ml_engine import LSTMPredictor
             return await LSTMPredictor.predict_threats(domain, osint_data)
 
         prompt = f"""
-        You are an advanced cybersecurity AI. Analyze the following OSINT data for the target domain: {domain}.
-        OSINT Data: {json.dumps(osint_data.get('summary', {}))}
+        You are an elite Incident Responder and Forensics Analyst. Perform a deep-dive technical threat analysis for the target: {domain}.
+        OSINT Intelligence: {json.dumps(osint_data.get('summary', {}))}
+        
+        Predict the top 3 most likely cyber attacks targeting this infrastructure.
+        For each threat, your analysis MUST be hyper-specific and technical:
+        1. The exact attack type and CVE if applicable.
+        2. ROOT CAUSE: Describe the precise memory flaw, architectural weakness, or misconfiguration (e.g., "Use-after-free in nf_tables", "Unsanitized input to eval()").
+        3. ATTACK VECTOR: Provide the step-by-step kill chain. Include technical details like HTTP payloads, exact commands (e.g., curl, nmap), or exploitation techniques.
+        4. AFFECTED COMPONENTS: Identify specific services, daemons, or frameworks based on the OSINT data.
+        5. REMEDIATION: Provide actionable, code-level remediation (e.g., exact iptables/ufw block rules, nginx.conf snippets, patch commands, or registry edits).
 
-        Predict the top 3 most likely cyber attacks against this target.
-        For each threat, provide:
-        1. The attack type and CVE if applicable
-        2. The ROOT CAUSE — WHY this threat exists (the underlying vulnerability, misconfiguration, or weakness)
-        3. The ATTACK VECTOR DETAIL — HOW an attacker would actually exploit this step by step
-        4. Which specific COMPONENTS are affected based on the OSINT data
-        5. A structured REMEDIATION plan with immediate, short-term, and long-term steps
-
-        Output MUST be in strict JSON array format:
+        Output MUST be in strict JSON array format. DO NOT use markdown code blocks (```json) in your response, just the raw JSON:
         [
           {{
             "predicted_attack_type": "string",
@@ -54,17 +54,16 @@ class LocalLLMService:
             "probability": float (0.0 to 1.0),
             "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
             "confidence": "high" | "medium" | "low",
-            "root_cause": "string — WHY this threat exists, the underlying vulnerability or misconfiguration",
-            "attack_vector_detail": "string — HOW the attacker exploits this step by step",
+            "root_cause": "string — Hyper-specific technical flaw",
+            "attack_vector_detail": "string — Step-by-step kill chain with technical payloads",
             "affected_components": ["string", "..."],
             "remediation": [
-              {{"step": 1, "action": "string", "priority": "immediate", "detail": "string"}},
+              {{"step": 1, "action": "string", "priority": "immediate", "detail": "string with exact commands/snippets"}},
               {{"step": 2, "action": "string", "priority": "short-term", "detail": "string"}},
               {{"step": 3, "action": "string", "priority": "long-term", "detail": "string"}}
             ]
           }}
         ]
-        Respond with ONLY the JSON array. Do not include any markdown formatting like ```json.
         """
 
         try:
@@ -74,12 +73,16 @@ class LocalLLMService:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json"
-                }, timeout=15) as response:
+                }, timeout=30) as response:
                     if response.status == 200:
                         data = await response.json()
                         response_text = data.get("response", "[]")
+                        
+                        # Robust JSON parsing: strip Markdown wrappers
+                        cleaned_json = re.sub(r"```json\s*|\s*```", "", response_text.strip())
+
                         try:
-                            predictions = json.loads(response_text)
+                            predictions = json.loads(cleaned_json)
                             # Backfill any missing enrichment fields from the KB
                             from app.services.ml.ml_engine import LSTMPredictor
                             for p in predictions:
@@ -88,7 +91,8 @@ class LocalLLMService:
                                 # Fill in any fields the LLM skipped
                                 if not p.get("root_cause") or not p.get("remediation"):
                                     rca = LSTMPredictor._get_root_cause_info(
-                                        attack_type, p.get("cve_description", "")
+                                        attack_type, p.get("cve_description", ""),
+                                        target_domain=domain, osint_data=osint_data
                                     )
                                     p.setdefault("root_cause", rca["root_cause"])
                                     p.setdefault("attack_vector_detail", rca["attack_vector_detail"])
@@ -96,13 +100,14 @@ class LocalLLMService:
                                     p.setdefault("remediation", rca["remediation"])
                             return predictions
                         except json.JSONDecodeError:
-                            logger.error(f"Failed to parse LLM response as JSON: {response_text}")
-                            return []
+                            logger.error(f"Failed to parse LLM JSON. Falling back to ML Engine. Cleaned text: {cleaned_json[:200]}")
+                            from app.services.ml.ml_engine import LSTMPredictor
+                            return await LSTMPredictor.predict_threats(domain, osint_data)
                     else:
                         from app.services.ml.ml_engine import LSTMPredictor
                         return await LSTMPredictor.predict_threats(domain, osint_data)
         except Exception as e:
-            logger.error(f"Error connecting to local LLM: {e}")
+            logger.error(f"Error connecting to local LLM: {e}. Falling back to ML Engine.")
             from app.services.ml.ml_engine import LSTMPredictor
             return await LSTMPredictor.predict_threats(domain, osint_data)
 
