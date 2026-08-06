@@ -26,6 +26,8 @@ class LocalLLMService:
         """
         Prompt the local Llama 3 model to predict threats based on OSINT data.
         Falls back to Statistical ML Engine (LSTMPredictor) if LLM is unreachable.
+        All predictions include root_cause, attack_vector_detail, affected_components,
+        and a structured remediation playbook.
         """
         if not await LocalLLMService.is_ollama_available():
             logger.warning("Ollama LLM unreachable. Falling back to Statistical ML Engine (LSTMPredictor).")
@@ -35,21 +37,36 @@ class LocalLLMService:
         prompt = f"""
         You are an advanced cybersecurity AI. Analyze the following OSINT data for the target domain: {domain}.
         OSINT Data: {json.dumps(osint_data.get('summary', {}))}
-        
-        Predict the top 3 most likely cyber attacks that could be carried out against this target.
-        Output MUST be in strict JSON array format with the following keys:
+
+        Predict the top 3 most likely cyber attacks against this target.
+        For each threat, provide:
+        1. The attack type and CVE if applicable
+        2. The ROOT CAUSE — WHY this threat exists (the underlying vulnerability, misconfiguration, or weakness)
+        3. The ATTACK VECTOR DETAIL — HOW an attacker would actually exploit this step by step
+        4. Which specific COMPONENTS are affected based on the OSINT data
+        5. A structured REMEDIATION plan with immediate, short-term, and long-term steps
+
+        Output MUST be in strict JSON array format:
         [
           {{
             "predicted_attack_type": "string",
             "predicted_cve": "string or null",
             "probability": float (0.0 to 1.0),
             "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
-            "confidence": "high" | "medium" | "low"
+            "confidence": "high" | "medium" | "low",
+            "root_cause": "string — WHY this threat exists, the underlying vulnerability or misconfiguration",
+            "attack_vector_detail": "string — HOW the attacker exploits this step by step",
+            "affected_components": ["string", "..."],
+            "remediation": [
+              {{"step": 1, "action": "string", "priority": "immediate", "detail": "string"}},
+              {{"step": 2, "action": "string", "priority": "short-term", "detail": "string"}},
+              {{"step": 3, "action": "string", "priority": "long-term", "detail": "string"}}
+            ]
           }}
         ]
         Respond with ONLY the JSON array. Do not include any markdown formatting like ```json.
         """
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(OLLAMA_API_URL, json={
@@ -63,9 +80,20 @@ class LocalLLMService:
                         response_text = data.get("response", "[]")
                         try:
                             predictions = json.loads(response_text)
-                            # Ensure it has the correct fields
+                            # Backfill any missing enrichment fields from the KB
+                            from app.services.ml.ml_engine import LSTMPredictor
                             for p in predictions:
                                 p['time_window_hours'] = 72
+                                attack_type = p.get("predicted_attack_type", "Exploitation Attempt")
+                                # Fill in any fields the LLM skipped
+                                if not p.get("root_cause") or not p.get("remediation"):
+                                    rca = LSTMPredictor._get_root_cause_info(
+                                        attack_type, p.get("cve_description", "")
+                                    )
+                                    p.setdefault("root_cause", rca["root_cause"])
+                                    p.setdefault("attack_vector_detail", rca["attack_vector_detail"])
+                                    p.setdefault("affected_components", rca["affected_components"])
+                                    p.setdefault("remediation", rca["remediation"])
                             return predictions
                         except json.JSONDecodeError:
                             logger.error(f"Failed to parse LLM response as JSON: {response_text}")

@@ -94,6 +94,13 @@ class ThreatResponse(BaseModel):
     is_resolved: bool
     detected_at: datetime
 
+    # ── Root Cause & Remediation ─────────────────────────────
+    root_cause: Optional[str] = None
+    cve_description: Optional[str] = None
+    affected_components: Optional[List[str]] = None
+    attack_vector_detail: Optional[str] = None
+    remediation: Optional[List[Dict[str, Any]]] = None
+
     class Config:
         from_attributes = True
 

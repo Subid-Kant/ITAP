@@ -155,7 +155,28 @@ class Threat(Base):
     ioc_type = Column(String(50), nullable=True)
     ioc_value = Column(String(500), nullable=True)
     source_feeds = Column(JSON, nullable=True)
-    
+
+    # ── Root Cause Analysis ──────────────────────────────────
+    root_cause = Column(Text, nullable=True)
+    # Why the threat exists — the underlying vulnerability, misconfiguration, or
+    # behaviour that enables the attack (e.g. "Unpatched OpenSSL 1.0.2, port 443
+    # exposed publicly with weak cipher suites").
+
+    cve_description = Column(Text, nullable=True)
+    # Full description of the linked CVE/vulnerability if applicable.
+
+    affected_components = Column(JSON, nullable=True)
+    # List of specific services/components identified as exposed/affected,
+    # e.g. ["nginx 1.18.0", "OpenSSH 7.2", "MySQL 5.6"].
+
+    attack_vector_detail = Column(Text, nullable=True)
+    # How the attacker would exploit this, step by step in plain language.
+
+    # ── Remediation Playbook ─────────────────────────────────
+    remediation = Column(JSON, nullable=True)
+    # Structured list of remediation steps. Each item is a dict:
+    # {"step": int, "action": str, "priority": "immediate"|"short-term"|"long-term", "detail": str}
+
     # Geolocation
     source_country = Column(String(100), nullable=True)
     source_city = Column(String(100), nullable=True)

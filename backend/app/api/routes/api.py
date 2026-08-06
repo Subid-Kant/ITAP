@@ -249,14 +249,18 @@ async def run_osint_scan(
             if sev_val not in [e.value for e in SeverityLevel]:
                 sev_val = "medium"
 
+            attack_vec_label = pred.get("attack_vector", "NETWORK")
             threat = Threat(
                 id=str(uuid.uuid4()),
                 target_id=target.id,
                 title=f"Predicted: {pred.get('predicted_attack_type', 'Unknown Threat')}",
                 description=(
-                    f"LLM prediction with {pred.get('probability', 0) * 100:.1f}% probability. "
+                    f"AI prediction — {pred.get('probability', 0) * 100:.1f}% probability within "
+                    f"{pred.get('time_window_hours', 72)}h. "
                     f"CVE: {pred.get('predicted_cve', 'N/A')}. "
-                    f"Model confidence: {pred.get('confidence', 'medium')}."
+                    f"Attack vector: {attack_vec_label}. "
+                    f"CVSS: {pred.get('cvss_score', 'N/A')}. "
+                    f"Confidence: {pred.get('confidence', 'medium')}."
                 ),
                 severity=SeverityLevel(sev_val),
                 severity_score=severity_result["score"],
@@ -269,6 +273,12 @@ async def run_osint_scan(
                 source_country=geo.get("country"),
                 source_latitude=geo.get("lat"),
                 source_longitude=geo.get("lon"),
+                # ── Root Cause & Remediation enrichment ──────────
+                root_cause=pred.get("root_cause"),
+                cve_description=pred.get("cve_description"),
+                affected_components=pred.get("affected_components"),
+                attack_vector_detail=pred.get("attack_vector_detail"),
+                remediation=pred.get("remediation"),
             )
             db.add(threat)
             threats_created.append(threat.title)
@@ -830,11 +840,23 @@ async def get_dashboard_stats(
             {
                 "id": t.id,
                 "title": t.title,
+                "description": t.description,
                 "severity": t.severity.value if hasattr(t.severity, "value") else str(t.severity),
                 "severity_score": t.severity_score,
+                "category": t.category,
                 "mitre_tactic": t.mitre_tactic,
+                "mitre_technique_id": t.mitre_technique_id,
+                "mitre_technique_name": t.mitre_technique_name,
+                "kill_chain_phase": t.kill_chain_phase,
+                "ioc_value": t.ioc_value,
                 "source_country": t.source_country,
                 "detected_at": t.detected_at.isoformat() if t.detected_at else None,
+                # ── Root Cause & Remediation ──────────────────────
+                "root_cause": t.root_cause,
+                "cve_description": t.cve_description,
+                "affected_components": t.affected_components,
+                "attack_vector_detail": t.attack_vector_detail,
+                "remediation": t.remediation,
             }
             for t in recent_threats
         ],

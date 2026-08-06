@@ -57,6 +57,416 @@ class LSTMPredictor:
         "Cryptographic Weakness": 0.50,
     }
 
+    # ── Root Cause Knowledge Base ──────────────────────────────
+    # Maps attack type → root cause explanation, how attacker exploits it,
+    # and which components are typically affected.
+    ROOT_CAUSE_DB: Dict[str, Dict[str, Any]] = {
+        "Remote Code Execution": {
+            "root_cause": (
+                "Unpatched or misconfigured application exposes a code execution path. "
+                "Common causes: outdated frameworks with known deserialization flaws, "
+                "unsafe eval() usage, exposed administrative interfaces without auth, "
+                "or vulnerable third-party libraries (Log4Shell, Spring4Shell-style)."
+            ),
+            "attack_vector_detail": (
+                "Attacker crafts a malicious payload (serialized object, shell command, "
+                "template expression) and delivers it via an HTTP parameter, file upload, "
+                "or API request. The vulnerable component deserializes/evaluates it without "
+                "sanitisation, spawning an attacker-controlled process with server privileges."
+            ),
+            "affected_components": ["Application server", "Web framework", "Third-party libraries", "API endpoints"],
+        },
+        "SQL Injection": {
+            "root_cause": (
+                "User-supplied input is concatenated directly into SQL queries without "
+                "parameterisation or escaping. Root cause is typically missing use of "
+                "prepared statements/ORM, or legacy inline query construction."
+            ),
+            "attack_vector_detail": (
+                "Attacker injects SQL syntax (UNION SELECT, OR 1=1, stacked queries) through "
+                "form fields, URL parameters, or HTTP headers. Database executes injected "
+                "statements granting read/write access to all tables, or OS command execution "
+                "via xp_cmdshell (MSSQL) / LOAD_FILE (MySQL)."
+            ),
+            "affected_components": ["Database layer", "Login endpoints", "Search/filter APIs", "Reporting modules"],
+        },
+        "Cross-Site Scripting": {
+            "root_cause": (
+                "Reflected or stored user content is rendered in the browser without HTML "
+                "entity encoding. Missing Content-Security-Policy headers and absence of "
+                "output sanitisation libraries compound the risk."
+            ),
+            "attack_vector_detail": (
+                "Attacker plants <script> payload in a comment field, URL parameter, or "
+                "HTTP header that is stored or reflected to victim browsers. Script runs in "
+                "the victim's session context, stealing cookies/tokens, redirecting to "
+                "phishing pages, or performing actions as the victim."
+            ),
+            "affected_components": ["Frontend rendering engine", "Comment/input fields", "Admin panels", "Session management"],
+        },
+        "Privilege Escalation": {
+            "root_cause": (
+                "Local user or process can gain elevated rights due to: misconfigured SUID "
+                "binaries, weak sudo rules, kernel vulnerabilities (use-after-free, "
+                "race conditions), or overly permissive file/directory ACLs."
+            ),
+            "attack_vector_detail": (
+                "After gaining initial low-privilege access, attacker exploits a local "
+                "vulnerability (e.g. CVE kernel bug, misconfigured cron job writing to "
+                "world-writable path, SUID binary path hijack) to execute arbitrary code "
+                "as root/SYSTEM."
+            ),
+            "affected_components": ["OS kernel", "SUID/SGID binaries", "Sudo configuration", "Scheduled tasks"],
+        },
+        "Buffer Overflow": {
+            "root_cause": (
+                "Memory-unsafe code (C/C++) copies attacker-controlled data into a fixed-size "
+                "buffer without bounds checking. Absence of ASLR, stack canaries, or DEP/NX "
+                "makes exploitation straightforward."
+            ),
+            "attack_vector_detail": (
+                "Attacker sends oversized input (network packet, file, environment variable) "
+                "that overwrites adjacent memory — typically the return address on the stack "
+                "or a function pointer on the heap — redirecting execution to shellcode or "
+                "ROP chains."
+            ),
+            "affected_components": ["Native/compiled services", "Network daemons", "Parsers (image, document, protocol)"],
+        },
+        "Authentication Bypass": {
+            "root_cause": (
+                "Authentication logic contains a flaw: default/hardcoded credentials, "
+                "JWT verification disabled (alg:none), broken session token entropy, "
+                "SAML response manipulation, or missing authentication on sensitive routes."
+            ),
+            "attack_vector_detail": (
+                "Attacker manipulates auth token (JWT header, SAML assertion), uses "
+                "default credentials, exploits a logic flaw in the login flow (e.g. "
+                "password reset race condition, OTP bypass), or directly accesses "
+                "unauthenticated API endpoints to gain administrative access."
+            ),
+            "affected_components": ["Authentication service", "Session manager", "JWT/SAML module", "API gateway"],
+        },
+        "Directory Traversal": {
+            "root_cause": (
+                "File path construction uses unsanitised user input without canonicalisation. "
+                "Absence of a chroot jail or path whitelist allows traversal outside the "
+                "web root using ../ sequences or URL-encoded equivalents."
+            ),
+            "attack_vector_detail": (
+                "Attacker appends ../../../../etc/passwd or %2F%2E%2E sequences to a file "
+                "download or include parameter, causing the server to read arbitrary files "
+                "from the filesystem — private keys, config files, /etc/shadow."
+            ),
+            "affected_components": ["File download endpoints", "Static file servers", "Include/require handlers"],
+        },
+        "Denial of Service": {
+            "root_cause": (
+                "Service lacks rate-limiting, connection throttling, or resource caps. "
+                "Algorithmic complexity attacks exploit worst-case CPU/memory paths "
+                "(ReDoS, hash collision). Volumetric attacks exploit amplification "
+                "protocols (NTP, DNS, SSDP) or bandwidth asymmetry."
+            ),
+            "attack_vector_detail": (
+                "Attacker floods the target with crafted requests (SYN flood, UDP "
+                "amplification, HTTP slow-read) or exploits a CPU/memory exhaustion path, "
+                "rendering the service unavailable. Botnets and rented DDoS-as-a-service "
+                "infrastructure are commonly used."
+            ),
+            "affected_components": ["Load balancer", "Application server", "Database connection pool", "DNS resolver"],
+        },
+        "Information Disclosure": {
+            "root_cause": (
+                "Verbose error messages, debug endpoints, directory listing, misconfigured "
+                "CORS, or overly permissive API responses leak sensitive data (stack traces, "
+                "internal IPs, API keys, PII) to unauthenticated callers."
+            ),
+            "attack_vector_detail": (
+                "Attacker probes error pages, /.git/ directories, /actuator endpoints, "
+                "or sends malformed requests to trigger stack traces. CORS misconfiguration "
+                "lets attacker-hosted pages read cross-origin responses containing auth tokens."
+            ),
+            "affected_components": ["Error handlers", "Debug/admin endpoints", "API response serialisation", "CORS policy"],
+        },
+        "Command Injection": {
+            "root_cause": (
+                "Application passes user input directly to a shell (os.system, subprocess, "
+                "exec) without sanitisation. Common in legacy scripts, network device "
+                "management interfaces, and file processing pipelines."
+            ),
+            "attack_vector_detail": (
+                "Attacker appends shell metacharacters (;, |, $(), backtick) to input "
+                "fields processed by shell commands — e.g. ping tool, DNS lookup feature, "
+                "image conversion script — executing arbitrary OS commands as the web "
+                "server user."
+            ),
+            "affected_components": ["Shell-calling utilities", "Network diagnostic tools", "File processing scripts", "CLI wrappers"],
+        },
+        "XML External Entity": {
+            "root_cause": (
+                "XML parser has external entity processing enabled (DTD loading not "
+                "disabled). Any endpoint accepting XML input (SOAP, SVG upload, "
+                "Excel/Word file processing) is potentially vulnerable."
+            ),
+            "attack_vector_detail": (
+                "Attacker crafts XML with an ENTITY declaration pointing to file:///etc/passwd "
+                "or an internal HTTP endpoint. Parser fetches and includes the content in "
+                "the response, enabling SSRF and arbitrary file read."
+            ),
+            "affected_components": ["XML parsers", "SOAP services", "Document upload endpoints", "Feed processors"],
+        },
+        "Server-Side Request Forgery": {
+            "root_cause": (
+                "Application fetches a URL or resource specified by user input without "
+                "validating the destination. Cloud metadata endpoints (169.254.169.254) "
+                "and internal services are accessible from the server's network context."
+            ),
+            "attack_vector_detail": (
+                "Attacker supplies an internal URL (http://169.254.169.254/latest/meta-data/, "
+                "http://localhost:6379/) to a webhook, image proxy, or URL fetch feature. "
+                "Server makes the request from its privileged network position, leaking "
+                "cloud credentials or triggering unauthenticated internal API calls."
+            ),
+            "affected_components": ["URL fetch features", "Webhook handlers", "Image/PDF generators", "Internal APIs"],
+        },
+        "Insecure Deserialization": {
+            "root_cause": (
+                "Application deserialises untrusted data (Java ObjectInputStream, PHP "
+                "unserialize, Python pickle, .NET BinaryFormatter) without type validation. "
+                "Gadget chains in the classpath allow arbitrary code execution."
+            ),
+            "attack_vector_detail": (
+                "Attacker crafts a malicious serialised payload using known gadget chains "
+                "(Apache Commons, Spring, Hibernate) and delivers it via a cookie, "
+                "API body, or message queue. Deserialisation triggers the gadget chain, "
+                "executing OS commands."
+            ),
+            "affected_components": ["Session cookies", "API request bodies", "Message queues", "Cache layers"],
+        },
+        "Cryptographic Weakness": {
+            "root_cause": (
+                "Use of deprecated algorithms (MD5, SHA-1, DES, RC4), short key lengths, "
+                "static IV/nonce, hardcoded encryption keys, or missing certificate "
+                "validation. Often caused by legacy code not updated to modern crypto standards."
+            ),
+            "attack_vector_detail": (
+                "Attacker performs offline brute-force/dictionary attack on weak hashes, "
+                "executes BEAST/POODLE attacks on deprecated TLS versions, or forges "
+                "signatures on JWT tokens with weak HS256 secrets, gaining unauthorized "
+                "access or decrypting sensitive traffic."
+            ),
+            "affected_components": ["Password hashing", "TLS configuration", "JWT signing", "Data encryption at rest"],
+        },
+        "Exploitation Attempt": {
+            "root_cause": (
+                "Automated scanner or threat actor has identified an exposed service and "
+                "is attempting to exploit a known or zero-day vulnerability. The root cause "
+                "is the exposure of the service combined with missing security controls."
+            ),
+            "attack_vector_detail": (
+                "Attacker uses automated tools (Metasploit, custom exploit kits) to probe "
+                "and exploit the target. Attack may include credential brute-force, "
+                "vulnerability fingerprinting, and payload delivery across multiple vectors."
+            ),
+            "affected_components": ["Exposed services", "Public-facing endpoints", "Management interfaces"],
+        },
+    }
+
+    # ── Remediation Knowledge Base ─────────────────────────────
+    REMEDIATION_DB: Dict[str, List[Dict[str, Any]]] = {
+        "Remote Code Execution": [
+            {"step": 1, "action": "Emergency patch or disable affected service", "priority": "immediate",
+             "detail": "Apply vendor patch immediately. If no patch exists, disable the vulnerable endpoint or place behind an authenticated proxy."},
+            {"step": 2, "action": "Block known exploit payloads at WAF", "priority": "immediate",
+             "detail": "Deploy WAF rules targeting serialisation payloads, JNDI/LDAP strings, and template injection patterns."},
+            {"step": 3, "action": "Upgrade all third-party dependencies", "priority": "short-term",
+             "detail": "Run dependency audit (npm audit, pip-audit, OWASP Dependency-Check) and upgrade vulnerable libraries."},
+            {"step": 4, "action": "Implement input validation and sandboxing", "priority": "short-term",
+             "detail": "Enforce strict input allowlists. Run application in sandboxed container with minimal OS privileges (read-only FS where possible)."},
+            {"step": 5, "action": "Harden server runtime environment", "priority": "long-term",
+             "detail": "Enable ASLR, stack canaries, seccomp profiles. Implement runtime application self-protection (RASP). Conduct regular SAST/DAST scanning in CI/CD."},
+        ],
+        "SQL Injection": [
+            {"step": 1, "action": "Block malicious requests at WAF immediately", "priority": "immediate",
+             "detail": "Enable SQLi detection rules on WAF/reverse proxy. Alert on UNION, ORDER BY, and comment-based payloads."},
+            {"step": 2, "action": "Audit and fix all raw SQL queries", "priority": "short-term",
+             "detail": "Replace all string-concatenated queries with parameterised queries or ORM. Audit stored procedures for injection points."},
+            {"step": 3, "action": "Apply principle of least privilege to DB accounts", "priority": "short-term",
+             "detail": "Web app DB user should only have SELECT/INSERT/UPDATE on necessary tables. Remove EXECUTE, FILE, and SUPER privileges."},
+            {"step": 4, "action": "Implement database activity monitoring", "priority": "long-term",
+             "detail": "Deploy DAM solution to alert on anomalous query patterns. Enable slow query logging for exfiltration detection."},
+            {"step": 5, "action": "Integrate SQLi testing in CI/CD pipeline", "priority": "long-term",
+             "detail": "Run SAST tools (Semgrep, SonarQube) and DAST scanners (SQLMap, OWASP ZAP) on every build."},
+        ],
+        "Cross-Site Scripting": [
+            {"step": 1, "action": "Sanitise all existing stored XSS payloads", "priority": "immediate",
+             "detail": "Scan database for stored script tags. Sanitise or remove malicious content. Invalidate all active sessions."},
+            {"step": 2, "action": "Implement Content-Security-Policy header", "priority": "immediate",
+             "detail": "Deploy strict CSP: Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{random}'. This prevents inline script execution even if XSS exists."},
+            {"step": 3, "action": "Add output encoding to all rendering paths", "priority": "short-term",
+             "detail": "Use context-aware encoding (HTML entity for HTML context, JS encoding for JS context). Use proven libraries: DOMPurify (client), OWASP Java Encoder (server)."},
+            {"step": 4, "action": "Set Secure/HttpOnly flags on all cookies", "priority": "short-term",
+             "detail": "All session cookies must have HttpOnly (prevents JS access) and Secure (HTTPS only) flags. Use SameSite=Strict to prevent CSRF."},
+            {"step": 5, "action": "Implement automated XSS testing", "priority": "long-term",
+             "detail": "Integrate DAST XSS scanning (OWASP ZAP, Burp Suite) in CI/CD. Train developers on secure rendering practices."},
+        ],
+        "Privilege Escalation": [
+            {"step": 1, "action": "Identify and patch the escalation vector immediately", "priority": "immediate",
+             "detail": "Apply kernel/OS patch. Remove or fix misconfigured SUID binaries. Audit sudo rules (sudo -l) and revoke excessive permissions."},
+            {"step": 2, "action": "Audit all user and process privileges", "priority": "immediate",
+             "detail": "Review /etc/sudoers, SUID binaries (find / -perm -4000), scheduled tasks, and service account permissions."},
+            {"step": 3, "action": "Enable kernel exploit mitigations", "priority": "short-term",
+             "detail": "Ensure ASLR (sysctl kernel.randomize_va_space=2), kernel.dmesg_restrict=1, and kernel.perf_event_paranoid=3 are set."},
+            {"step": 4, "action": "Deploy endpoint detection and response (EDR)", "priority": "short-term",
+             "detail": "Deploy EDR to detect anomalous privilege changes, SUID execution, and unusual parent-child process relationships."},
+            {"step": 5, "action": "Implement automated privilege access management (PAM)", "priority": "long-term",
+             "detail": "Use PAM solution for just-in-time access. All admin actions require approval and are logged with full audit trail."},
+        ],
+        "Buffer Overflow": [
+            {"step": 1, "action": "Apply vendor patch or disable vulnerable service", "priority": "immediate",
+             "detail": "Apply security patch immediately. If unavailable, disable or network-isolate the vulnerable service."},
+            {"step": 2, "action": "Enable OS-level exploit mitigations", "priority": "immediate",
+             "detail": "Verify ASLR (echo 2 > /proc/sys/kernel/randomize_va_space), stack canaries (compile with -fstack-protector-all), and NX/DEP are enabled."},
+            {"step": 3, "action": "Recompile affected software with security flags", "priority": "short-term",
+             "detail": "Recompile with: -fstack-protector-all -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security -pie -fPIE -Wl,-z,relro,-z,now."},
+            {"step": 4, "action": "Deploy network-level filtering for known exploit patterns", "priority": "short-term",
+             "detail": "Configure IPS signatures to detect oversized payloads and known shellcode patterns for the vulnerable service."},
+            {"step": 5, "action": "Migrate to memory-safe language for critical components", "priority": "long-term",
+             "detail": "Evaluate Rust or Go rewrites for security-critical network-facing components. Establish memory safety review process."},
+        ],
+        "Authentication Bypass": [
+            {"step": 1, "action": "Force password reset for all affected accounts", "priority": "immediate",
+             "detail": "Immediately invalidate all active sessions. Force password reset for accounts accessible via the bypass."},
+            {"step": 2, "action": "Disable or fix the vulnerable authentication path", "priority": "immediate",
+             "detail": "Patch the authentication flaw. If JWT alg:none: enforce algorithm whitelist. If default creds: change immediately and lock account."},
+            {"step": 3, "action": "Implement multi-factor authentication (MFA)", "priority": "short-term",
+             "detail": "Enforce MFA on all privileged accounts. Use TOTP (RFC 6238) or hardware keys (FIDO2/WebAuthn)."},
+            {"step": 4, "action": "Conduct full authentication flow security review", "priority": "short-term",
+             "detail": "Audit all authentication endpoints for logic flaws. Verify server-side session validation on every protected route."},
+            {"step": 5, "action": "Implement Zero Trust network architecture", "priority": "long-term",
+             "detail": "Move to continuous authentication model. Implement device trust, geo-velocity checks, and behavioural analytics for anomalous logins."},
+        ],
+        "Directory Traversal": [
+            {"step": 1, "action": "Sanitise all file path inputs immediately", "priority": "immediate",
+             "detail": "Apply path canonicalisation (realpath()) and validate resolved path starts with expected base directory. Reject requests with ../ patterns."},
+            {"step": 2, "action": "Restrict file system access with chroot/containers", "priority": "short-term",
+             "detail": "Run web server process in chroot jail or Docker container with read-only bind mounts limited to the web root."},
+            {"step": 3, "action": "Implement file allowlist instead of blocklist", "priority": "short-term",
+             "detail": "Restrict file access to an explicit whitelist of permitted filenames/extensions. Reject all others."},
+            {"step": 4, "action": "Audit all file-serving endpoints", "priority": "long-term",
+             "detail": "Review all endpoints that read from the filesystem. Ensure file paths are constructed server-side, never from user input."},
+        ],
+        "Denial of Service": [
+            {"step": 1, "action": "Enable DDoS scrubbing / CDN protection immediately", "priority": "immediate",
+             "detail": "Route traffic through DDoS mitigation service (Cloudflare, AWS Shield, Akamai). Enable rate limiting at the edge."},
+            {"step": 2, "action": "Implement application-level rate limiting", "priority": "immediate",
+             "detail": "Add rate limiting middleware (e.g., nginx limit_req, API gateway throttling) — max 100 req/min per IP for authenticated, 20 for anonymous."},
+            {"step": 3, "action": "Configure resource caps and timeouts", "priority": "short-term",
+             "detail": "Set request body size limits, query timeout limits, max DB connection pool size, and memory limits per request."},
+            {"step": 4, "action": "Disable amplification protocols on public interfaces", "priority": "short-term",
+             "detail": "Disable NTP monlist, DNS recursion for external clients, SSDP/mDNS on public interfaces to prevent amplification attacks."},
+            {"step": 5, "action": "Implement autoscaling and circuit breakers", "priority": "long-term",
+             "detail": "Configure autoscaling to absorb legitimate traffic spikes. Implement circuit breakers to shed load gracefully under attack."},
+        ],
+        "Information Disclosure": [
+            {"step": 1, "action": "Disable verbose error messages in production", "priority": "immediate",
+             "detail": "Configure framework to return generic error pages (500 Internal Server Error) without stack traces. Log details server-side only."},
+            {"step": 2, "action": "Remove or restrict debug/admin endpoints", "priority": "immediate",
+             "detail": "Disable /actuator, /.git, /phpinfo.php, /swagger-ui in production. Restrict to internal IP ranges if needed."},
+            {"step": 3, "action": "Audit and fix CORS configuration", "priority": "short-term",
+             "detail": "Replace Access-Control-Allow-Origin: * with explicit origin allowlist. Never combine with Access-Control-Allow-Credentials: true."},
+            {"step": 4, "action": "Implement API response field filtering", "priority": "short-term",
+             "detail": "Audit all API responses — ensure internal fields, hashes, and PII are not included in any response payload."},
+            {"step": 5, "action": "Conduct data classification and DLP implementation", "priority": "long-term",
+             "detail": "Classify all data assets. Implement Data Loss Prevention controls to detect and block exfiltration of classified data."},
+        ],
+        "Command Injection": [
+            {"step": 1, "action": "Remove all shell-calling code or sanitise input", "priority": "immediate",
+             "detail": "Replace os.system/shell=True subprocess calls with parameterised API equivalents. If unavoidable, use strict allowlist for all arguments."},
+            {"step": 2, "action": "Deploy WAF rule to block shell metacharacters", "priority": "immediate",
+             "detail": "Block requests containing: ; | & ` $( ) > < in parameters processed by shell-calling endpoints."},
+            {"step": 3, "action": "Run application as low-privilege user", "priority": "short-term",
+             "detail": "Web application process must run as a dedicated non-root user with minimal filesystem and network permissions."},
+            {"step": 4, "action": "Implement seccomp profile to restrict syscalls", "priority": "short-term",
+             "detail": "Apply seccomp whitelist profile blocking execve and fork syscalls for the web server process."},
+            {"step": 5, "action": "Refactor to use native APIs instead of shell", "priority": "long-term",
+             "detail": "Replace all shell-based functionality with native library calls (e.g., Python subprocess list form, Java ProcessBuilder with arg arrays)."},
+        ],
+        "XML External Entity": [
+            {"step": 1, "action": "Disable external entity processing in XML parsers", "priority": "immediate",
+             "detail": "Set XMLConstants.FEATURE_SECURE_PROCESSING=true (Java). Set resolve_entities=False (libxml2). Use defusedxml (Python). Apply to ALL XML parsers in codebase."},
+            {"step": 2, "action": "Disable DTD processing entirely", "priority": "immediate",
+             "detail": "Configure parser to reject DOCTYPE declarations: setFeature(DISALLOW_DOCTYPE_DECL, true) in Java. This completely blocks XXE."},
+            {"step": 3, "action": "Validate and sanitise all XML input", "priority": "short-term",
+             "detail": "Validate XML against a strict schema (XSD) before processing. Reject documents that fail schema validation."},
+            {"step": 4, "action": "Consider migrating from XML to JSON", "priority": "long-term",
+             "detail": "Where possible, replace XML APIs with JSON equivalents which do not have XXE risks. Reduces attack surface significantly."},
+        ],
+        "Server-Side Request Forgery": [
+            {"step": 1, "action": "Block requests to internal/metadata IP ranges", "priority": "immediate",
+             "detail": "Implement server-side URL validation blocking: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (AWS metadata)."},
+            {"step": 2, "action": "Disable cloud metadata endpoint from application tier", "priority": "immediate",
+             "detail": "Configure IMDSv2 on AWS (require session-oriented access). Set hop limit to 1 to prevent SSRF from reaching metadata API."},
+            {"step": 3, "action": "Implement URL scheme allowlist", "priority": "short-term",
+             "detail": "Only permit https:// URLs from approved external domains. Reject file://, gopher://, dict://, ftp:// schemes entirely."},
+            {"step": 4, "action": "Segment application network with egress controls", "priority": "long-term",
+             "detail": "Place application servers in a network segment with strict egress firewall rules — only allow outbound to known external services."},
+        ],
+        "Insecure Deserialization": [
+            {"step": 1, "action": "Block or remove insecure deserialisation endpoints", "priority": "immediate",
+             "detail": "Disable Java ObjectInputStream, PHP unserialize, Python pickle on untrusted data. Replace with safe alternatives (JSON with strict schema)."},
+            {"step": 2, "action": "Implement serialisation allowlisting", "priority": "immediate",
+             "detail": "Use look-ahead ObjectInputStream (Apache Commons IO) to whitelist only expected classes. Reject all unexpected types."},
+            {"step": 3, "action": "Sign and verify all serialised payloads", "priority": "short-term",
+             "detail": "Add HMAC signature to all serialised data (cookies, cache entries). Verify signature before deserialisation."},
+            {"step": 4, "action": "Deploy deserialization attack detection", "priority": "short-term",
+             "detail": "Use Java agent (NotSoSerial, SerialKiller) or RASP to detect and block known gadget chain execution patterns at runtime."},
+            {"step": 5, "action": "Remove gadget chain libraries from classpath", "priority": "long-term",
+             "detail": "Audit and remove unnecessary libraries that provide gadget chains (Commons Collections, Spring, Hibernate). Reduce attack surface."},
+        ],
+        "Cryptographic Weakness": [
+            {"step": 1, "action": "Migrate all hashes to bcrypt/Argon2 immediately", "priority": "immediate",
+             "detail": "Re-hash all stored passwords with bcrypt (cost factor ≥12) or Argon2id. Force password reset if MD5/SHA-1 hashes are exposed."},
+            {"step": 2, "action": "Enforce TLS 1.2+ and disable weak cipher suites", "priority": "immediate",
+             "detail": "Disable SSLv3, TLS 1.0, TLS 1.1. Remove RC4, DES, 3DES, EXPORT cipher suites. Use Mozilla's modern TLS configuration."},
+            {"step": 3, "action": "Rotate all secrets and API keys", "priority": "short-term",
+             "detail": "Rotate all JWT secrets, API keys, and encryption keys. Use secrets manager (AWS Secrets Manager, HashiCorp Vault) for storage."},
+            {"step": 4, "action": "Implement certificate pinning for mobile/client apps", "priority": "short-term",
+             "detail": "Pin TLS certificates in mobile apps to prevent MITM attacks even with compromised CA."},
+            {"step": 5, "action": "Conduct cryptographic audit of entire codebase", "priority": "long-term",
+             "detail": "Use SAST tools to find all cryptographic operations. Enforce crypto standards via policy as code in CI/CD pipeline."},
+        ],
+        "Exploitation Attempt": [
+            {"step": 1, "action": "Block source IPs at firewall level", "priority": "immediate",
+             "detail": "Add firewall rules to block IPs identified in the scan. Subscribe to threat intelligence feeds for automated IP blocking."},
+            {"step": 2, "action": "Enable full packet capture on affected segments", "priority": "immediate",
+             "detail": "Capture traffic from attacking IPs for forensic analysis. Use this to identify the specific exploit being attempted."},
+            {"step": 3, "action": "Patch all known vulnerabilities identified in scan", "priority": "short-term",
+             "detail": "Prioritise and patch CVEs identified by the OSINT scan. Use a vulnerability management platform to track remediation progress."},
+            {"step": 4, "action": "Harden exposed attack surface", "priority": "short-term",
+             "detail": "Close unnecessary open ports. Disable unused services. Apply network segmentation to limit blast radius."},
+            {"step": 5, "action": "Implement continuous security monitoring", "priority": "long-term",
+             "detail": "Deploy SIEM, IDS/IPS, and EDR for continuous threat detection. Establish a vulnerability disclosure and rapid response process."},
+        ],
+    }
+
+    @staticmethod
+    def _get_root_cause_info(attack_type: str, cve_desc: str = "") -> Dict[str, Any]:
+        """Return root cause, attack vector detail, affected components, and remediation for an attack type."""
+        db_entry = LSTMPredictor.ROOT_CAUSE_DB.get(attack_type, LSTMPredictor.ROOT_CAUSE_DB["Exploitation Attempt"])
+        remediation = LSTMPredictor.REMEDIATION_DB.get(attack_type, LSTMPredictor.REMEDIATION_DB["Exploitation Attempt"])
+
+        root_cause = db_entry["root_cause"]
+        # Prepend actual CVE description if available for specificity
+        if cve_desc:
+            root_cause = f"CVE Details: {cve_desc[:300]}\n\nRoot Cause Analysis: {root_cause}"
+
+        return {
+            "root_cause": root_cause,
+            "attack_vector_detail": db_entry["attack_vector_detail"],
+            "affected_components": db_entry["affected_components"],
+            "remediation": remediation,
+        }
+
     @staticmethod
     async def predict_threats(
         domain: str,
@@ -66,6 +476,7 @@ class LSTMPredictor:
         """
         Generate threat predictions based on OSINT data.
         Deterministic per domain — same domain always produces same base predictions.
+        Each prediction now includes root cause analysis and remediation steps.
         """
         predictions = []
 
@@ -96,12 +507,13 @@ class LSTMPredictor:
         )
         env_risk = min(env_risk, 0.75)
 
-        # Process CVEs from OSINT
+        # Process CVEs from OSINT — each CVE becomes a targeted prediction
         cve_data = osint_data.get("sources", {}).get("cve_nvd", [])
         if isinstance(cve_data, list):
             for cve in cve_data[:6]:
                 cvss = float(cve.get("cvss_score", 5.0))
                 cve_id = cve.get("cve_id", "")
+                cve_desc = cve.get("description", "")
 
                 # LSTM-style probability calculation
                 cvss_factor = (cvss / 10.0) * 0.35          # 35% weight
@@ -115,11 +527,23 @@ class LSTMPredictor:
                     0.98,
                 )
 
+                attack_type = LSTMPredictor._classify_attack(cve_desc)
+                rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc)
+
+                # Enrich affected_components with Shodan service data if available
+                shodan_services = osint_data.get("sources", {}).get("shodan", {}).get("services", [])
+                if shodan_services:
+                    svc_components = [
+                        f"{s.get('product', 'Unknown')} {s.get('version', '')} (port {s.get('port', '?')})".strip()
+                        for s in shodan_services[:4]
+                        if s.get("product")
+                    ]
+                    if svc_components:
+                        rca["affected_components"] = svc_components + rca["affected_components"]
+
                 predictions.append({
                     "predicted_cve": cve_id,
-                    "predicted_attack_type": LSTMPredictor._classify_attack(
-                        cve.get("description", "")
-                    ),
+                    "predicted_attack_type": attack_type,
                     "probability": round(float(probability), 4),
                     "time_window_hours": window_hours,
                     "cvss_score": cvss,
@@ -132,6 +556,12 @@ class LSTMPredictor:
                     ),
                     "predicted_at": datetime.utcnow().isoformat(),
                     "expires_at": (datetime.utcnow() + timedelta(hours=window_hours)).isoformat(),
+                    # ── Root Cause & Remediation ──────────────────
+                    "root_cause": rca["root_cause"],
+                    "attack_vector_detail": rca["attack_vector_detail"],
+                    "affected_components": rca["affected_components"],
+                    "cve_description": cve_desc[:500] if cve_desc else None,
+                    "remediation": rca["remediation"],
                 })
 
         # General attack type predictions (domain-seeded)
@@ -141,6 +571,7 @@ class LSTMPredictor:
             adjusted_prob = env_adj * domain_factor
 
             if adjusted_prob > 0.25:
+                rca = LSTMPredictor._get_root_cause_info(attack_type)
                 predictions.append({
                     "predicted_cve": None,
                     "predicted_attack_type": attack_type,
@@ -155,6 +586,12 @@ class LSTMPredictor:
                     "confidence": "high" if adjusted_prob > 0.70 else "medium",
                     "predicted_at": datetime.utcnow().isoformat(),
                     "expires_at": (datetime.utcnow() + timedelta(hours=window_hours)).isoformat(),
+                    # ── Root Cause & Remediation ──────────────────
+                    "root_cause": rca["root_cause"],
+                    "attack_vector_detail": rca["attack_vector_detail"],
+                    "affected_components": rca["affected_components"],
+                    "cve_description": None,
+                    "remediation": rca["remediation"],
                 })
 
         # Sort by probability descending
