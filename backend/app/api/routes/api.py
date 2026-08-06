@@ -1126,16 +1126,17 @@ async def get_history_summary(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Get a summary of historical/archived targets and their threat counts.
+    Get a summary of ALL targets (active and archived) and their threat counts.
+    Shows both current and historical scans so users can always view past results.
     """
     result = await db.execute(
-        select(Target).where(Target.is_archived == True).order_by(Target.created_at.desc())
+        select(Target).order_by(Target.created_at.desc())
     )
-    archived_targets = result.scalars().all()
+    all_targets = result.scalars().all()
     
     history_list = []
-    for t in archived_targets:
-        # Get threats for this specific historical target
+    for t in all_targets:
+        # Get threats for this target
         threats_count = (await db.execute(
             select(func.count(Threat.id)).where(Threat.target_id == t.id)
         )).scalar() or 0
@@ -1151,9 +1152,39 @@ async def get_history_summary(
             "created_at": t.created_at.isoformat() if t.created_at else None,
             "threats_count": threats_count,
             "scans_count": scans_count,
+            "is_archived": t.is_archived,
         })
         
     return {"history": history_list}
+
+
+@router.delete("/history/all", tags=["System"])
+async def delete_all_history(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_admin_role),
+):
+    """
+    Permanently delete ALL targets, scans, threats, and incidents from the database.
+    This allows users to do a fresh re-scan of domains.
+    """
+    from sqlalchemy import delete as sql_delete
+
+    # Delete in dependency order to respect foreign keys
+    await db.execute(sql_delete(ThreatPrediction))
+    await db.execute(sql_delete(AnomalyDetection))
+    await db.execute(sql_delete(RemediationLog))
+    await db.execute(sql_delete(OSINTData))
+    await db.execute(sql_delete(Threat))
+    await db.execute(sql_delete(Incident))
+    await db.execute(sql_delete(Scan))
+    await db.execute(sql_delete(Target))
+    await db.commit()
+
+    await ws_manager.broadcast_system_event(
+        "warning", "All History Deleted",
+        detail=f"All scan history permanently deleted by {current_user.get('sub', 'system')}"
+    )
+    return {"status": "success", "message": "All history has been permanently deleted. You can now re-scan domains."}
 
 
 @router.get("/history/target/{target_id}", tags=["System"])

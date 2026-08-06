@@ -1,15 +1,22 @@
 import { useState } from 'react';
-import { Crosshair, AlertTriangle } from 'lucide-react';
+import { Crosshair, AlertTriangle, RotateCcw } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
 
-export default function ScannerView() {
+export default function ScannerView({ onScanComplete, scannerState, setScannerState }) {
   const { user } = useAuth();
   const isViewer = user?.role === 'viewer';
-  const [domain, setDomain] = useState('');
   const [scanning, setScanning] = useState(false);
-  const [results, setResults] = useState(null);
-  const [error, setError] = useState('');
+
+  // Use lifted state (props) so results survive view-switching.
+  // Fall back to local state if the component is used standalone.
+  const domain = scannerState?.domain ?? '';
+  const results = scannerState?.results ?? null;
+  const error = scannerState?.error ?? '';
+
+  const setDomain = (val) => setScannerState(s => ({ ...s, domain: val }));
+  const setResults = (val) => setScannerState(s => ({ ...s, results: val }));
+  const setError = (val) => setScannerState(s => ({ ...s, error: val }));
 
   const handleScan = async () => {
     if (!domain.trim() || isViewer) return;
@@ -17,15 +24,21 @@ export default function ScannerView() {
     setError('');
     setResults(null);
     try {
-      // First create target, then scan
+      // Create target, then run full OSINT scan
       const target = await api.createTarget({ domain: domain.trim() });
       const scan = await api.runScan({ target_id: target.id, scan_types: ['shodan', 'virustotal', 'cve'] });
       setResults(scan);
+      // Notify App.jsx to refresh the dashboard so new threats appear immediately
+      if (onScanComplete) onScanComplete();
     } catch (e) {
       setError(e.message || 'Scan failed to complete. Please ensure backend services are running and the target is reachable.');
     } finally {
       setScanning(false);
     }
+  };
+
+  const handleClear = () => {
+    setScannerState({ domain: '', results: null, error: '' });
   };
 
   return (
@@ -38,6 +51,16 @@ export default function ScannerView() {
         <button className="header-btn primary" onClick={handleScan} disabled={scanning || isViewer} title={isViewer ? "Viewer mode restricted" : ""}>
           <Crosshair size={14} /> {scanning ? 'Scanning...' : 'Scan Target'}
         </button>
+        {results && (
+          <button
+            className="header-btn"
+            onClick={handleClear}
+            title="Clear results and scan a new domain"
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <RotateCcw size={14} /> Clear
+          </button>
+        )}
       </div>
 
       {scanning && (
@@ -66,6 +89,11 @@ export default function ScannerView() {
                 <div className="stat-card"><div className="stat-value">{results.summary?.recent_cves || 0}</div><div className="stat-label">Recent CVEs</div></div>
                 <div className="stat-card"><div className="stat-value">{results.summary?.otx_pulses || 0}</div><div className="stat-label">OTX Pulses</div></div>
               </div>
+              {results.threats_created?.length > 0 && (
+                <div style={{ color: '#22C55E', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  ✓ {results.threats_created.length} threat{results.threats_created.length !== 1 ? 's' : ''} added to SOC Dashboard
+                </div>
+              )}
             </div>
           </div>
 
@@ -102,4 +130,3 @@ export default function ScannerView() {
     </div>
   );
 }
-

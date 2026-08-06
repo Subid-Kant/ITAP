@@ -28,6 +28,18 @@ function AppContent() {
   const { stats, loading, refresh, isLive } = useDashboard(isAuthenticated);
   const { addToast } = useToast();
 
+  // Lifted scanner state — persists across view switches
+  const [scannerState, setScannerState] = useState({
+    domain: '',
+    results: null,
+    error: '',
+  });
+
+  const handleScanComplete = useCallback(() => {
+    // Refresh dashboard so new target/threats appear immediately
+    refresh();
+  }, [refresh]);
+
   const handleWSEvent = useCallback((event) => {
     if (event.type === 'threat_detected') {
       const sev = event.data?.severity || 'medium';
@@ -65,7 +77,12 @@ function AppContent() {
       case 'dashboard':   return <DashboardView stats={stats} isLive={isLive} />;
       case 'threats':     return <ThreatsView stats={stats} />;
       case 'incidents':   return <IncidentsView stats={stats} />;
-      case 'scanner':     return <ScannerView onScanComplete={refresh} />;
+      case 'scanner':     return <ScannerView
+                            onScanComplete={handleScanComplete}
+                            scannerState={scannerState}
+                            setScannerState={setScannerState}
+                          />;
+
       case 'predictions': return <PredictionsView />;
       case 'anomalies':   return <AnomaliesView />;
       case 'mitre':       return <MitreView stats={stats} />;

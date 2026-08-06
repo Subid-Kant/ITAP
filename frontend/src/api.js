@@ -165,6 +165,7 @@ export const api = {
 
   // ── System ───────────────────────────────────────────────
   newSession: () => request('/system/new-session', { method: 'POST' }),
+  deleteAllHistory: () => request('/history/all', { method: 'DELETE' }),
 
   // ── Reports ──────────────────────────────────────────────
   generateReport: (format = 'json', days = 7) =>
