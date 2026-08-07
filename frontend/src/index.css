@@ -1751,3 +1751,71 @@ body::before {
   100% { opacity: 0.8; }
 }
 
+/* ═══════════════════════════════════════════════════════════
+   Micro-Animations & Cyber Effects (Phase 4 Overhaul)
+   ═══════════════════════════════════════════════════════════ */
+
+/* Smooth fade in for route transitions */
+@keyframes fadeInSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeInSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Staggered entrance for grids */
+.stagger > * {
+  opacity: 0;
+  animation: fadeInSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.stagger > *:nth-child(1) { animation-delay: 0.05s; }
+.stagger > *:nth-child(2) { animation-delay: 0.10s; }
+.stagger > *:nth-child(3) { animation-delay: 0.15s; }
+.stagger > *:nth-child(4) { animation-delay: 0.20s; }
+.stagger > *:nth-child(5) { animation-delay: 0.25s; }
+.stagger > *:nth-child(6) { animation-delay: 0.30s; }
+
+/* Interactive Hover States */
+.interactive-hover {
+  transition: all 0.2s ease;
+}
+.interactive-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 163, 255, 0.15);
+  border-color: rgba(0, 163, 255, 0.4);
+}
+
+/* Scanner Sweep Effect */
+@keyframes scannerSweep {
+  0% { top: -100%; opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { top: 200%; opacity: 0; }
+}
+
+.scanner-sweep {
+  position: relative;
+  overflow: hidden;
+}
+.scanner-sweep::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(to bottom, transparent, rgba(0, 245, 212, 0.2), transparent);
+  animation: scannerSweep 3s infinite linear;
+  pointer-events: none;
+}
+
+/* Subtle Pulse for Live Badges */
+@keyframes softPulse {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.7; }
+}
+.live-pulse {
+  animation: softPulse 2s infinite ease-in-out;
+}

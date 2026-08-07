@@ -163,9 +163,15 @@ export const api = {
   getGlobalThreats: () => request('/monitoring/global-threats'),
   getMachineScan: () => request('/monitoring/machine-scan'),
 
-  // ── System ───────────────────────────────────────────────
-  newSession: () => request('/system/new-session', { method: 'POST' }),
-  deleteAllHistory: () => request('/history/all', { method: 'DELETE' }),
+  // ── History ──────────────────────────────────────────────
+  getHistorySummary: () => request('/history/summary'),
+  getHistoryTarget: (id) => request(`/history/target/${id}`),
+
+  // ── SOAR — Active Defense ────────────────────────────────
+  blockIP: (ip, threat_id, reason) =>
+    request('/soar/block-ip', { method: 'POST', body: JSON.stringify({ ip, threat_id, reason }) }),
+  getBlockedIPs: () => request('/soar/blocked-ips'),
+  unblockIP: (ip) => request(`/soar/blocked-ips/${encodeURIComponent(ip)}`, { method: 'DELETE' }),
 
   // ── Reports ──────────────────────────────────────────────
   generateReport: (format = 'json', days = 7) =>
@@ -184,4 +190,8 @@ export const api = {
     a.click();
     URL.revokeObjectURL(url);
   },
+
+  // ── System ───────────────────────────────────────────────
+  newSession: () => request('/system/new-session', { method: 'POST' }),
+  deleteAllHistory: () => request('/history/all', { method: 'DELETE' }),
 };

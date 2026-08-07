@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import './index.css';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -16,6 +16,7 @@ import IOCWorkbench from './components/IOCWorkbench';
 import ReportsView from './components/ReportsView';
 import LoginView from './components/LoginView';
 import HistoryView from './components/HistoryView';
+import CommandPalette from './components/CommandPalette';
 import ToastProvider, { useToast } from './components/ToastNotification';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { WebSocketProvider } from './hooks/useWebSocket';
@@ -27,6 +28,19 @@ function AppContent() {
   const { isAuthenticated, user, logout } = useAuth();
   const { stats, loading, refresh, isLive } = useDashboard(isAuthenticated);
   const { addToast } = useToast();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Global Cmd/Ctrl+K listener for Command Palette
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setPaletteOpen(p => !p);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // Lifted scanner state — persists across view switches
   const [scannerState, setScannerState] = useState({
@@ -99,6 +113,11 @@ function AppContent() {
 
   return (
     <WebSocketProvider onEvent={handleWSEvent}>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNavigate={(view) => { setActiveView(view); setPaletteOpen(false); }}
+      />
       <div className="app-layout">
         <Sidebar
           activeView={activeView}
@@ -115,6 +134,7 @@ function AppContent() {
             onNewSession={handleNewSession}
             isLive={isLive}
             user={user}
+            onOpenPalette={() => setPaletteOpen(true)}
           />
           <div className="dashboard">
             {loading && !stats ? (

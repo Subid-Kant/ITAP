@@ -43,24 +43,26 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     logger.info("✓ Database initialized and schema synchronized")
-    
-    # Clean-slate startup: archive any lingering active records
-    async with async_session_factory() as db:
-        await db.execute(update(Target).where(Target.is_archived == False).values(is_archived=True))
-        await db.execute(update(Scan).where(Scan.is_archived == False).values(is_archived=True))
-        await db.execute(update(Threat).where(Threat.is_archived == False).values(is_archived=True))
-        await db.execute(update(Incident).where(Incident.is_archived == False).values(is_archived=True))
-        await db.execute(update(AnomalyDetection).where(AnomalyDetection.is_archived == False).values(is_archived=True))
-        await db.commit()
-    logger.info("✓ Database cleaned for new session (old data archived)")
+
+    # Optional Redis cache check (graceful fallback)
+    try:
+        from app.core.cache import health_check as redis_health
+        redis_status = await redis_health()
+        if redis_status["redis"] == "connected":
+            logger.info(f"✓ Redis cache connected — 24h TTL scan caching ACTIVE (v{redis_status.get('version', '?')})")
+        else:
+            logger.info("⚠️  Redis not available — scan caching DISABLED (app will still work)")
+    except Exception:
+        logger.info("⚠️  Redis module not installed — scan caching DISABLED")
 
     logger.info(f"✓ CORS allowed origins: {settings.cors_origins}")
     logger.info(f"✓ Rate limit: {settings.RATE_LIMIT_REQUESTS} req/{settings.RATE_LIMIT_WINDOW_SECONDS}s per IP")
     logger.info("✓ Security middleware: headers, request-ID, rate-limiter")
     logger.info("✓ JWT authentication ready (HS256)")
-    logger.info("✓ OSINT services: Shodan, VirusTotal, CVE/NVD, AlienVault OTX")
+    logger.info("✓ OSINT services: Shodan, VirusTotal, CVE/NVD, AlienVault OTX (deep per-service CVE analysis)")
     logger.info("✓ ML Engine: LSTM predictor, Autoencoder, Severity scorer")
-    logger.info("✓ Threat Intelligence: MITRE ATT&CK, Kill-Chain, Threat DNA")
+    logger.info("✓ Threat Intelligence: MITRE ATT&CK, Kill-Chain, IOC")
+    logger.info("✓ SOAR: Mock Firewall IP blocking (admin-only)")
     logger.info("✓ Response Engine: Playbook generator, Alert dispatcher")
     logger.info(f"✓ API docs: http://localhost:{settings.PORT}/docs")
     logger.info(f"✓ WebSocket: ws://localhost:{settings.PORT}/ws/live")
@@ -155,10 +157,16 @@ app.include_router(api_router, prefix="/api/v1")
 @app.get("/health", tags=["System"])
 async def health_check():
     """Health check endpoint for load balancers and Docker healthchecks."""
+    from app.core.cache import health_check as redis_health
+    try:
+        redis_status = await redis_health()
+    except Exception:
+        redis_status = {"redis": "unavailable"}
     return {
         "status": "healthy",
         "version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
+        "cache": redis_status,
     }
 
 

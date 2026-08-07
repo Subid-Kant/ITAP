@@ -5,8 +5,10 @@ Includes JWT authentication, pagination, WebSocket broadcasts, and PDF report ge
 """
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, update
+from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import uuid
@@ -39,6 +41,15 @@ from app.api.routes.ws import manager as ws_manager
 
 logger = logging.getLogger("itap.api")
 router = APIRouter()
+
+
+# ─── Role-based Access Control ───────────────────────────────────────────────
+
+async def check_admin_role(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency that restricts access to admin users only."""
+    if current_user.get("role") not in ("admin",):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
 
 
 # ─────────────────────────────────────────────
@@ -118,7 +129,7 @@ async def check_admin_role(current_user: dict = Depends(get_current_user)):
 async def create_target(
     target: TargetCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_admin_role),
+    current_user: dict = Depends(get_current_user),
 ):
     """Register a new target domain/IP for monitoring."""
     # Check for duplicate
@@ -197,7 +208,7 @@ async def run_osint_scan(
     request: ScanRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_admin_role),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Run a comprehensive OSINT scan on a target.
@@ -303,6 +314,15 @@ async def run_osint_scan(
         "threats_created": len(threats_created),
     })
 
+    is_admin = current_user.get("role") == "admin"
+
+    # Build per-service vulnerability reports — strip poc_command for non-admins
+    vuln_by_service = osint_results.get("vulnerabilities_by_service", [])
+    if not is_admin:
+        for svc_report in vuln_by_service:
+            for cve in svc_report.get("cves", []):
+                cve.pop("poc_command", None)
+
     return {
         "scan_id": scan.id,
         "target": target.domain,
@@ -312,6 +332,9 @@ async def run_osint_scan(
         "predictions": predictions[:5],
         "threats_created": threats_created,
         "osint_data": osint_results.get("sources"),
+        "vulnerabilities_by_service": vuln_by_service,
+        "threat_surface": osint_results.get("threat_surface", []),
+        "osint_fingerprint": osint_results.get("osint_fingerprint", {}),
     }
 
 
@@ -820,10 +843,12 @@ async def get_dashboard_stats(
         )
     )).scalar() or 0
 
-    recent_threats_result = await db.execute(
-        select(Threat).where(Threat.is_archived == False).order_by(Threat.detected_at.desc()).limit(10)
+    # Fetch all active threats for comprehensive aggregations (limit 1000 to prevent memory issues)
+    all_threats_result = await db.execute(
+        select(Threat).options(selectinload(Threat.target)).where(Threat.is_archived == False).order_by(Threat.detected_at.desc()).limit(1000)
     )
-    recent_threats = recent_threats_result.scalars().all()
+    all_active_threats = all_threats_result.scalars().all()
+    recent_threats = all_active_threats[:10]
 
     recent_incidents_result = await db.execute(
         select(Incident).where(Incident.is_archived == False).order_by(Incident.detected_at.desc()).limit(10)
@@ -838,7 +863,7 @@ async def get_dashboard_stats(
         severity_counts[sev.value] = count
 
     country_threats = []
-    for threat in recent_threats:
+    for threat in all_active_threats:
         if threat.source_country and threat.source_latitude:
             country_threats.append({
                 "country": threat.source_country,
@@ -849,24 +874,56 @@ async def get_dashboard_stats(
             })
 
     mitre_coverage = []
-    for threat in recent_threats:
+    for threat in all_active_threats:
         if threat.mitre_tactic:
+            tech_id = threat.mitre_technique_id or ""
+            mitre_url = f"https://attack.mitre.org/techniques/{tech_id}/" if tech_id else "https://attack.mitre.org/"
             mitre_coverage.append({
                 "tactic": threat.mitre_tactic,
-                "technique_id": threat.mitre_technique_id,
+                "technique_id": tech_id,
                 "technique_name": threat.mitre_technique_name,
                 "severity": threat.severity.value if hasattr(threat.severity, "value") else str(threat.severity),
+                "target_domain": threat.target.domain if threat.target else None,
+                "mitre_url": mitre_url,
+                "threat_id": threat.id,
             })
+
+    # ── Kill Chain Progression — aggregate phase counts from real threats ──
+    kill_chain_order = [
+        "Reconnaissance", "Resource Development", "Initial Access", "Execution",
+        "Persistence", "Privilege Escalation", "Defense Evasion", "Credential Access",
+        "Discovery", "Lateral Movement", "Collection", "Command and Control",
+        "Exfiltration", "Impact",
+    ]
+    kill_chain_progression = {phase: 0 for phase in kill_chain_order}
+    for threat in all_active_threats:
+        phase = threat.kill_chain_phase
+        if phase and phase in kill_chain_progression:
+            kill_chain_progression[phase] += 1
+
+    # ── Attack Surface Summary — top affected components from real threats ──
+    component_counts: Dict[str, int] = {}
+    for threat in all_active_threats:
+        components = threat.affected_components or []
+        if isinstance(components, list):
+            for comp in components:
+                component_counts[comp] = component_counts.get(comp, 0) + 1
+    attack_surface_summary = [
+        {"component": k, "threat_count": v, "severity": "HIGH" if v >= 3 else "MEDIUM"}
+        for k, v in sorted(component_counts.items(), key=lambda x: -x[1])[:8]
+    ]
 
     return {
         "total_targets": targets_count,
         "active_threats": threats_count,
         "critical_threats": critical_count,
         "open_incidents": incidents_count,
-        "predictions_active": len(recent_threats),
+        "predictions_active": len(all_active_threats),
         "anomalies_detected": anomaly_count,
         "threats_by_severity": severity_counts,
         "threats_by_country": country_threats,
+        "kill_chain_progression": kill_chain_progression,
+        "attack_surface_summary": attack_surface_summary,
         "recent_threats": [
             {
                 "id": t.id,
@@ -882,7 +939,6 @@ async def get_dashboard_stats(
                 "ioc_value": t.ioc_value,
                 "source_country": t.source_country,
                 "detected_at": t.detected_at.isoformat() if t.detected_at else None,
-                # ── Root Cause & Remediation ──────────────────────
                 "root_cause": t.root_cause,
                 "cve_description": t.cve_description,
                 "affected_components": t.affected_components,
@@ -1229,3 +1285,93 @@ async def get_history_target_details(
             } for th in threats
         ]
     }
+
+
+# ─────────────────────────────────────────────────────────────────
+# SOAR — Security Orchestration, Automation & Response
+# ─────────────────────────────────────────────────────────────────
+
+# In-memory mock firewall store (replace with real firewall API in production)
+_blocked_ips: Dict[str, Any] = {}
+
+
+class SOARBlockRequest(BaseModel):
+    ip: str
+    threat_id: Optional[str] = None
+    reason: Optional[str] = "Blocked via ITAP SOC Dashboard"
+
+
+@router.post("/soar/block-ip", tags=["SOAR"])
+async def soar_block_ip(
+    request: SOARBlockRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_admin_role),
+):
+    """
+    [ADMIN ONLY] Block a malicious IP via the mock firewall integration.
+    In production, replace the mock store with a real firewall API call.
+    """
+    import re
+    # Validate IP format
+    ip_pattern = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+    if not ip_pattern.match(request.ip):
+        raise HTTPException(status_code=400, detail="Invalid IP address format")
+
+    rule_id = f"ITAP-{uuid.uuid4().hex[:8].upper()}"
+    _blocked_ips[request.ip] = {
+        "ip": request.ip,
+        "rule_id": rule_id,
+        "reason": request.reason,
+        "blocked_by": current_user.get("sub", "admin"),
+        "blocked_at": datetime.utcnow().isoformat(),
+        "threat_id": request.threat_id,
+    }
+
+    # Update the linked threat status if provided
+    if request.threat_id:
+        threat = (await db.execute(select(Threat).where(Threat.id == request.threat_id))).scalar_one_or_none()
+        if threat:
+            threat.is_resolved = True
+            threat.resolved_at = datetime.utcnow()
+            await db.commit()
+
+    await ws_manager.broadcast_system_event(
+        "warning", f"IP Blocked: {request.ip}",
+        detail=f"Firewall rule {rule_id} applied by {current_user.get('sub', 'admin')}. Reason: {request.reason}"
+    )
+
+    return {
+        "status": "blocked",
+        "ip": request.ip,
+        "rule_id": rule_id,
+        "message": f"IP {request.ip} has been blocked. Firewall rule {rule_id} is active.",
+        "mock_command": f"iptables -A INPUT -s {request.ip} -j DROP  # {rule_id}",
+    }
+
+
+@router.get("/soar/blocked-ips", tags=["SOAR"])
+async def soar_get_blocked_ips(
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all currently blocked IPs and their firewall rules."""
+    return {
+        "count": len(_blocked_ips),
+        "blocked_ips": list(_blocked_ips.values()),
+    }
+
+
+@router.delete("/soar/blocked-ips/{ip}", tags=["SOAR"])
+async def soar_unblock_ip(
+    ip: str,
+    current_user: dict = Depends(check_admin_role),
+):
+    """[ADMIN ONLY] Remove a firewall block rule for a specific IP."""
+    if ip not in _blocked_ips:
+        raise HTTPException(status_code=404, detail=f"IP {ip} is not in the block list")
+
+    rule = _blocked_ips.pop(ip)
+    await ws_manager.broadcast_system_event(
+        "info", f"IP Unblocked: {ip}",
+        detail=f"Firewall rule {rule['rule_id']} removed by {current_user.get('sub', 'admin')}"
+    )
+    return {"status": "unblocked", "ip": ip, "rule_id": rule["rule_id"]}

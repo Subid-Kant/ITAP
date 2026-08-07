@@ -149,27 +149,47 @@ export default function KillChainView({ stats }) {
   const [loading, setLoading] = useState(false);
   const [selectedPhaseIdx, setSelectedPhaseIdx] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedThreatId, setSelectedThreatId] = useState('');
 
-  // Derive current phase from threats
+  // All available threats with kill chain phase data
+  const availableThreats = useMemo(() =>
+    (stats?.recent_threats || []).filter(t => t.kill_chain_phase || t.mitre_tactic),
+    [stats]
+  );
+
+  // Selected threat object
+  const selectedThreat = useMemo(() =>
+    availableThreats.find(t => t.id === selectedThreatId) || null,
+    [availableThreats, selectedThreatId]
+  );
+
+  // Derive current phase from threats (use selected threat's phase if one is chosen)
   const detectedTactics = useMemo(
     () => new Set((stats?.mitre_attack_coverage || []).map(c => c.tactic)),
     [stats]
   );
 
-  const currentIdx = useMemo(() => PHASES.reduce((max, phase, idx) => {
-    const match = [...detectedTactics].some(t =>
-      t.toLowerCase().includes(phase.toLowerCase().split(' ')[0].toLowerCase())
-    );
-    return match ? Math.max(max, idx) : max;
-  }, 2), [detectedTactics]);
+  const currentIdx = useMemo(() => {
+    // If a specific threat is selected, use its kill chain phase
+    if (selectedThreat?.kill_chain_phase) {
+      const idx = PHASES.indexOf(selectedThreat.kill_chain_phase);
+      if (idx !== -1) return idx;
+    }
+    return PHASES.reduce((max, phase, idx) => {
+      const match = [...detectedTactics].some(t =>
+        t.toLowerCase().includes(phase.toLowerCase().split(' ')[0].toLowerCase())
+      );
+      return match ? Math.max(max, idx) : max;
+    }, 2);
+  }, [detectedTactics, selectedThreat]);
 
   const currentPhase = PHASES[currentIdx];
 
   const relatedThreat = useMemo(() =>
-    stats?.recent_threats?.find(t =>
+    selectedThreat || stats?.recent_threats?.find(t =>
       t.mitre_tactic && t.mitre_tactic.toLowerCase().includes(currentPhase.toLowerCase().split(' ')[0].toLowerCase())
     ),
-    [stats, currentPhase]
+    [stats, currentPhase, selectedThreat]
   );
 
   const loadKillChain = useCallback(async () => {
@@ -223,6 +243,39 @@ export default function KillChainView({ stats }) {
 
   return (
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+      {/* ── Threat Selector Dropdown ── */}
+      {availableThreats.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '10px 16px', background: 'rgba(55,138,221,0.06)',
+          border: '1px solid rgba(55,138,221,0.2)', borderRadius: 10,
+        }}>
+          <Target size={14} color="#378ADD" />
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', whiteSpace: 'nowrap' }}>View Kill Chain For:</span>
+          <select
+            value={selectedThreatId}
+            onChange={e => { setSelectedThreatId(e.target.value); setRefreshKey(k => k + 1); }}
+            style={{
+              flex: 1, background: 'rgba(10,14,23,0.8)', color: '#F0EFE9',
+              border: '1px solid rgba(55,138,221,0.25)', borderRadius: 6,
+              padding: '6px 10px', fontSize: 12, cursor: 'pointer', outline: 'none',
+            }}
+          >
+            <option value="">Auto-detect (highest threat stage)</option>
+            {availableThreats.map(t => (
+              <option key={t.id} value={t.id}>
+                [{t.severity?.toUpperCase()}] {t.title} — Phase: {t.kill_chain_phase || t.mitre_tactic}
+              </option>
+            ))}
+          </select>
+          {selectedThreat && (
+            <span style={{ fontSize: 10, color: '#F59E0B', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+              📍 Pinned to phase: {selectedThreat.kill_chain_phase || selectedThreat.mitre_tactic}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Top Summary Banner ── */}
       <div style={{

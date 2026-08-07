@@ -16,14 +16,12 @@ export function useDashboard(isAuthenticated = true) {
       setIsLive(true);
     } catch (e) {
       console.error('Dashboard fetch error:', e);
-      if (!stats) {
-        setStats(getDemoStats());
-      }
+      setStats(prev => prev || getDemoStats());
       setIsLive(false);
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, stats]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

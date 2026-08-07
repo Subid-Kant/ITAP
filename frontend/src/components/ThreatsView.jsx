@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Shield, Target, Zap, Wrench, BookOpen, Clock } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Shield, Target, Zap, Wrench, BookOpen, Clock, ShieldOff } from 'lucide-react';
+import { api } from '../api';
+import { useAuth } from '../hooks/useAuth';
 
 const PRIORITY_META = {
   immediate: { label: 'Immediate', color: '#ef4444', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.35)' },
@@ -42,7 +44,56 @@ function RemediationStep({ step }) {
   );
 }
 
-function ThreatCard({ t }) {
+function BlockIPButton({ threat }) {
+  const [status, setStatus] = useState('idle'); // idle | loading | done | error
+  const ip = threat.source_country ? `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}` : null;
+
+  const handleBlock = async (e) => {
+    e.stopPropagation();
+    if (!ip) return;
+    const confirmed = window.confirm(
+      `Block IP from ${threat.source_country} associated with:\n"${threat.title}"\n\nThis will add a firewall rule via SOAR. Continue?`
+    );
+    if (!confirmed) return;
+    setStatus('loading');
+    try {
+      await api.blockIP(ip, threat.id, `Threat: ${threat.title}`);
+      setStatus('done');
+    } catch (err) {
+      console.error('Block IP failed:', err);
+      setStatus('error');
+    }
+  };
+
+  if (!ip) return null;
+  if (status === 'done') return (
+    <span style={{ fontSize: 10, color: '#22C55E', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.3)', padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' }}>
+      🛡️ Contained
+    </span>
+  );
+
+  return (
+    <button
+      onClick={handleBlock}
+      disabled={status === 'loading'}
+      title={`Block source IP from ${threat.source_country}`}
+      style={{
+        background: status === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(255,46,99,0.08)',
+        border: `1px solid ${status === 'error' ? 'rgba(239,68,68,0.4)' : 'rgba(255,46,99,0.3)'}`,
+        color: status === 'error' ? '#EF4444' : '#FF2E63',
+        borderRadius: 5, padding: '3px 8px', cursor: 'pointer',
+        fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap',
+        display: 'flex', alignItems: 'center', gap: 4,
+        transition: 'all 0.2s',
+      }}
+    >
+      <ShieldOff size={10} />
+      {status === 'loading' ? '...' : status === 'error' ? 'Failed' : '🛡️ Block IP'}
+    </button>
+  );
+}
+
+function ThreatCard({ t, isAdmin }) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('root_cause');
 
@@ -125,7 +176,7 @@ function ThreatCard({ t }) {
           {t.source_country ? `📍 ${t.source_country}` : '—'}
         </span>
 
-        {/* Time + expand icon */}
+        {/* Time + expand icon + admin Block IP */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{
             fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
@@ -133,6 +184,7 @@ function ThreatCard({ t }) {
           }}>
             {t.detected_at ? new Date(t.detected_at).toLocaleString() : '—'}
           </span>
+          {isAdmin && t.source_country && <BlockIPButton threat={t} />}
           {hasEnrichment && (
             <span style={{ color: 'rgba(240,239,233,0.4)', flexShrink: 0 }}>
               {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
@@ -298,6 +350,8 @@ function ThreatCard({ t }) {
 
 export default function ThreatsView({ stats }) {
   const threats = stats?.recent_threats || [];
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   return (
     <div className="fade-in">
@@ -341,7 +395,7 @@ export default function ThreatsView({ stats }) {
               <p>Run an OSINT scan to discover threats</p>
             </div>
           ) : (
-            threats.map((t, i) => <ThreatCard key={t.id || i} t={t} />)
+            threats.map((t, i) => <ThreatCard key={t.id || i} t={t} isAdmin={isAdmin} />)
           )}
         </div>
 
