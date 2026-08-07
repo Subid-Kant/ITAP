@@ -11,8 +11,19 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import logging
+from pathlib import Path
 
-logger = logging.getLogger("itap.ml")
+# Attempt to load the native numpy ML models
+try:
+    from app.services.ml.native_inference import NativeLSTM, NativeAutoencoder
+    WEIGHTS_DIR = Path(__file__).parent / "weights"
+    lstm_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_v2.h5"))
+    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_v2.h5"))
+    MODELS_LOADED = True
+    print("[INFO] Successfully loaded ITAP Native ML Models")
+except Exception as e:
+    MODELS_LOADED = False
+    print(f"[WARNING] Could not load ML models, using simulation fallback: {e}")
 
 # Global seeded RNG for reproducibility
 _rng = np.random.default_rng(42)
@@ -557,16 +568,21 @@ class LSTMPredictor:
                 cve_desc = cve.get("description", "")
 
                 # LSTM-style probability calculation
-                cvss_factor = (cvss / 10.0) * 0.35          # 35% weight
-                env_factor = env_risk * 0.30                 # 30% weight
-                recency_factor = 0.15                        # Recent CVEs more exploitable
-                ti_factor = min(otx_pulses / 50.0, 0.15)    # 15% TI signal
+                cvss_factor = (cvss / 10.0) * 0.35
+                env_factor = env_risk * 0.30
+                recency_factor = 0.15
+                ti_factor = min(otx_pulses / 50.0, 0.15)
                 domain_noise = _seeded_float(-0.04, 0.04, f"{domain}:{cve_id}")
+                
+                # Default simulation probability
+                probability = min(max(cvss_factor + env_factor + recency_factor + ti_factor + domain_noise, 0.05), 0.98)
 
-                probability = min(
-                    max(cvss_factor + env_factor + recency_factor + ti_factor + domain_noise, 0.05),
-                    0.98,
-                )
+                if MODELS_LOADED:
+                    # Pass features into actual LSTM model
+                    # LSTM expects (samples, time_steps, features) -> features: [cvss, complexity, privileges, interaction, age_days]
+                    # We approximate complexity, privileges, interaction as 0 for High CVSS, and age as 30
+                    x_input = np.array([[[cvss/10.0, 0.0, 0.0, 0.0, 30.0/365.0]]])
+                    probability = float(lstm_engine.predict(x_input)[0][0])
 
                 attack_type = LSTMPredictor._classify_attack(cve_desc)
                 rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc, target_domain=domain, osint_data=osint_data)
@@ -753,22 +769,35 @@ class AutoencoderDetector:
             is_attack = rng.random() < 0.09  # ~9% attack rate
 
             if is_attack:
-                # Inject anomalous features
                 attack_type_idx = int(rng.integers(0, 5))
                 features = AutoencoderDetector._generate_attack_features(rng, attack_type_idx)
-                # Reconstruction error: high for anomalies
-                reconstruction_error = float(rng.uniform(0.78, 0.99))
             else:
-                features = {
-                    key: float(abs(rng.normal(mu, sigma)))
-                    for key, (mu, sigma) in baseline.items()
-                }
-                reconstruction_error = float(rng.uniform(0.02, 0.60))
+                features = {key: float(abs(rng.normal(mu, sigma))) for key, (mu, sigma) in baseline.items()}
 
-            anomaly_score = reconstruction_error
+            if MODELS_LOADED:
+                # 5 input features for AE: src_bytes, dst_bytes, count, duration, entropy
+                # Scale them down roughly to 0-1 for the autoencoder input
+                x_in = np.array([[
+                    min(features.get("byte_rate", 0)/20000, 1.0),
+                    min(features.get("packet_size_mean", 0)/2000, 1.0),
+                    min(features.get("packet_count", 0)/2000, 1.0),
+                    min(features.get("duration", 0)/10, 1.0),
+                    min(features.get("payload_entropy", 0)/8, 1.0)
+                ]])
+                x_out = ae_engine.predict(x_in)
+                # Anomaly score is the Mean Squared Error of the reconstruction
+                anomaly_score = float(np.mean(np.square(x_in - x_out)))
+                # Scale MSE so normal is low, attack is high
+                anomaly_score = min(anomaly_score * 10.0, 0.99)
+                reconstruction_error = anomaly_score
+            else:
+                if is_attack:
+                    reconstruction_error = float(rng.uniform(0.78, 0.99))
+                else:
+                    reconstruction_error = float(rng.uniform(0.02, 0.60))
+                anomaly_score = reconstruction_error
 
             if anomaly_score >= threshold:
-                # Generate Threat DNA fingerprint
                 feature_str = str(sorted(features.items()))
                 full_hash = hashlib.sha256(feature_str.encode()).hexdigest()
 

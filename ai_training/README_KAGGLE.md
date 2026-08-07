@@ -16,8 +16,9 @@ pip install kaggle
 
 ## Step 2 — Get Your API Token
 
-1. Go to [kaggle.com](https://www.kaggle.com) → **Account** → **API** → **Create New Token**
-2. A `kaggle.json` file will download containing your credentials
+1. Go to [kaggle.com](https://www.kaggle.com) → **Settings** (or Account) → **API**
+2. Scroll down to the **Legacy API Credentials** section and click **Create Legacy API Key**
+3. A `kaggle.json` file will automatically download containing your credentials
 3. Place it in the correct location:
 
 **Windows:**
@@ -44,6 +45,9 @@ python ai_training/push_to_kaggle.py
 
 # Push AND trigger training immediately on Kaggle's cloud GPU
 python ai_training/push_to_kaggle.py --run
+
+# NOTE for Windows Users: If you get a 'UnicodeEncodeError' regarding emojis, run it like this:
+# $env:PYTHONIOENCODING="utf-8"; python ai_training/push_to_kaggle.py --run
 ```
 
 ✅ Your laptop can now be closed — training continues on Kaggle's T4 GPU.
@@ -54,7 +58,7 @@ python ai_training/push_to_kaggle.py --run
 
 Visit your notebook on Kaggle:
 ```
-https://www.kaggle.com/code/<your-username>/itap-threat-prediction-training
+https://www.kaggle.com/code/<your-username>/itap-lstm-autoencoder-threat-training
 ```
 
 Or check status via CLI:

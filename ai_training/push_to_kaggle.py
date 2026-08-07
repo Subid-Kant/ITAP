@@ -23,13 +23,13 @@ from pathlib import Path
 KAGGLE_USERNAME = None   # Auto-detected from ~/.kaggle/kaggle.json
 NOTEBOOK_PATH   = Path(__file__).parent / "Kaggle_ITAP_LLM_Training.ipynb"
 DATASET_PATH    = Path(__file__).parent / "itap_training_data.jsonl"
-KERNEL_SLUG     = "itap-threat-prediction-training"
+KERNEL_SLUG     = "itap-lstm-autoencoder-threat-training"
 DATASET_SLUG    = "itap-training-dataset"
 
 
 def check_kaggle_installed():
     """Verify Kaggle CLI is installed."""
-    if shutil.which("kaggle") is None:
+    if shutil.which("kaggle") is None and subprocess.run([sys.executable, "-m", "kaggle", "--version"], capture_output=True).returncode != 0:
         print("❌ Kaggle CLI not found. Install it with:\n   pip install kaggle")
         sys.exit(1)
     print("✅ Kaggle CLI found")
@@ -69,8 +69,8 @@ def push_dataset(username: str):
         
         # Push to Kaggle
         result = subprocess.run(
-            ["kaggle", "datasets", "create", "-p", tmpdir, "--dir-mode", "zip"],
-            capture_output=True, text=True
+            [sys.executable, "-m", "kaggle", "datasets", "create", "-p", tmpdir, "--dir-mode", "zip"],
+            capture_output=True, text=True, encoding="utf-8"
         )
         
         if result.returncode == 0:
@@ -78,8 +78,8 @@ def push_dataset(username: str):
         else:
             # Try updating if it already exists
             result2 = subprocess.run(
-                ["kaggle", "datasets", "version", "-p", tmpdir, "-m", "Updated training data"],
-                capture_output=True, text=True
+                [sys.executable, "-m", "kaggle", "datasets", "version", "-p", tmpdir, "-m", "Updated training data"],
+                capture_output=True, text=True, encoding="utf-8"
             )
             if result2.returncode == 0:
                 print(f"✅ Dataset updated: https://www.kaggle.com/datasets/{username}/{DATASET_SLUG}")
@@ -118,8 +118,8 @@ def push_notebook(username: str, run_immediately: bool = False):
         
         # Push kernel
         result = subprocess.run(
-            ["kaggle", "kernels", "push", "-p", tmpdir],
-            capture_output=True, text=True
+            [sys.executable, "-m", "kaggle", "kernels", "push", "-p", tmpdir],
+            capture_output=True, text=True, encoding="utf-8"
         )
         
         if result.returncode == 0:
@@ -140,7 +140,7 @@ def check_training_status(username: str):
     """Check the current status of the training kernel."""
     print(f"\n📊 Checking training status for kernel: {KERNEL_SLUG}")
     result = subprocess.run(
-        ["kaggle", "kernels", "status", f"{username}/{KERNEL_SLUG}"],
+        [sys.executable, "-m", "kaggle", "kernels", "status", f"{username}/{KERNEL_SLUG}"],
         capture_output=True, text=True
     )
     if result.returncode == 0:
@@ -158,7 +158,7 @@ def download_weights(username: str):
     weights_dir.mkdir(parents=True, exist_ok=True)
     
     result = subprocess.run(
-        ["kaggle", "kernels", "output", f"{username}/{KERNEL_SLUG}", "-p", str(weights_dir)],
+        [sys.executable, "-m", "kaggle", "kernels", "output", f"{username}/{KERNEL_SLUG}", "-p", str(weights_dir)],
         capture_output=True, text=True
     )
     if result.returncode == 0:
