@@ -21,38 +21,37 @@ from pathlib import Path
 
 # ─── Configuration ────────────────────────────────────────────
 KAGGLE_USERNAME = None   # Auto-detected from ~/.kaggle/kaggle.json
-NOTEBOOK_PATH   = Path(__file__).parent / "Kaggle_ITAP_LLM_Training.ipynb"
-DATASET_PATH    = Path(__file__).parent / "itap_training_data.jsonl"
-KERNEL_SLUG     = "itap-lstm-autoencoder-threat-training"
+NOTEBOOK_PATH   = Path(__file__).parent / "Kaggle_ITAP_OSINT_Training.ipynb"
+KERNEL_SLUG     = "itap-osint-threat-training"
 DATASET_SLUG    = "itap-training-dataset"
 
 
 def check_kaggle_installed():
     """Verify Kaggle CLI is installed."""
     if shutil.which("kaggle") is None and subprocess.run([sys.executable, "-m", "kaggle", "--version"], capture_output=True).returncode != 0:
-        print("❌ Kaggle CLI not found. Install it with:\n   pip install kaggle")
+        print("[ERROR] Kaggle CLI not found. Install it with:\n   pip install kaggle")
         sys.exit(1)
-    print("✅ Kaggle CLI found")
+    print("[OK] Kaggle CLI found")
 
 
 def get_kaggle_credentials() -> dict:
     """Load Kaggle credentials from ~/.kaggle/kaggle.json."""
     cred_path = Path.home() / ".kaggle" / "kaggle.json"
     if not cred_path.exists():
-        print(f"❌ Kaggle credentials not found at {cred_path}")
-        print("   1. Go to https://www.kaggle.com → Account → API → Create New Token")
+        print(f"[ERROR] Kaggle credentials not found at {cred_path}")
+        print("   1. Go to https://www.kaggle.com -> Account -> API -> Create New Token")
         print("   2. Save the downloaded kaggle.json to ~/.kaggle/kaggle.json")
         print("   3. Run: chmod 600 ~/.kaggle/kaggle.json  (on Linux/Mac)")
         sys.exit(1)
     with open(cred_path) as f:
         creds = json.load(f)
-    print(f"✅ Kaggle credentials loaded for user: {creds['username']}")
+    print(f"[OK] Kaggle credentials loaded for user: {creds['username']}")
     return creds
 
 
 def push_dataset(username: str):
     """Push the training dataset to Kaggle."""
-    print("\n📦 Pushing training dataset to Kaggle...")
+    print("\n[PUSH] Pushing training dataset to Kaggle...")
     
     with tempfile.TemporaryDirectory() as tmpdir:
         # Copy dataset to temp dir
@@ -74,7 +73,7 @@ def push_dataset(username: str):
         )
         
         if result.returncode == 0:
-            print(f"✅ Dataset pushed: https://www.kaggle.com/datasets/{username}/{DATASET_SLUG}")
+            print(f"[OK] Dataset pushed: https://www.kaggle.com/datasets/{username}/{DATASET_SLUG}")
         else:
             # Try updating if it already exists
             result2 = subprocess.run(
@@ -82,17 +81,17 @@ def push_dataset(username: str):
                 capture_output=True, text=True, encoding="utf-8"
             )
             if result2.returncode == 0:
-                print(f"✅ Dataset updated: https://www.kaggle.com/datasets/{username}/{DATASET_SLUG}")
+                print(f"[OK] Dataset updated: https://www.kaggle.com/datasets/{username}/{DATASET_SLUG}")
             else:
-                print(f"⚠️  Dataset push note: {result.stderr.strip()}")
+                print(f"[WARN] Dataset push note: {result.stderr.strip()}")
 
 
 def push_notebook(username: str, run_immediately: bool = False):
     """Push the training notebook to Kaggle as a kernel."""
-    print("\n📓 Pushing training notebook to Kaggle...")
+    print("\n[PUSH] Pushing training notebook to Kaggle...")
     
     if not NOTEBOOK_PATH.exists():
-        print(f"❌ Notebook not found at {NOTEBOOK_PATH}")
+        print(f"[ERROR] Notebook not found at {NOTEBOOK_PATH}")
         sys.exit(1)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -102,16 +101,13 @@ def push_notebook(username: str, run_immediately: bool = False):
         # Create kernel metadata
         kernel_meta = {
             "id": f"{username}/{KERNEL_SLUG}",
-            "title": "ITAP — LSTM & Autoencoder Threat Training",
+            "title": "ITAP OSINT Threat Training",
             "code_file": NOTEBOOK_PATH.name,
             "language": "python",
             "kernel_type": "notebook",
             "is_private": True,
             "enable_gpu": True,
-            "enable_internet": True,
-            "dataset_sources": [f"{username}/{DATASET_SLUG}"],
-            "competition_sources": [],
-            "kernel_sources": [],
+            "enable_internet": True
         }
         with open(os.path.join(tmpdir, "kernel-metadata.json"), "w") as f:
             json.dump(kernel_meta, f, indent=2)
@@ -124,21 +120,21 @@ def push_notebook(username: str, run_immediately: bool = False):
         
         if result.returncode == 0:
             kernel_url = f"https://www.kaggle.com/code/{username}/{KERNEL_SLUG}"
-            print(f"✅ Notebook pushed: {kernel_url}")
-            print(f"   GPU Training: {'ENABLED ✅' if kernel_meta['enable_gpu'] else 'DISABLED'}")
-            print(f"   Internet: {'ENABLED ✅' if kernel_meta['enable_internet'] else 'DISABLED'}")
+            print(f"[OK] Notebook pushed: {kernel_url}")
+            print(f"   GPU Training: {'ENABLED' if kernel_meta['enable_gpu'] else 'DISABLED'}")
+            print(f"   Internet: {'ENABLED' if kernel_meta['enable_internet'] else 'DISABLED'}")
             if run_immediately:
-                print("\n🚀 Training started on Kaggle cloud GPU!")
-                print("   You can close your laptop — training continues on Kaggle's servers.")
+                print("\n[START] Training started on Kaggle cloud GPU!")
+                print("   You can close your laptop -- training continues on Kaggle's servers.")
                 print(f"   Monitor at: {kernel_url}")
         else:
-            print(f"❌ Notebook push failed: {result.stderr.strip()}")
+            print(f"[ERROR] Notebook push failed: {result.stderr.strip()}")
             sys.exit(1)
 
 
 def check_training_status(username: str):
     """Check the current status of the training kernel."""
-    print(f"\n📊 Checking training status for kernel: {KERNEL_SLUG}")
+    print(f"\n[STATUS] Checking training status for kernel: {KERNEL_SLUG}")
     result = subprocess.run(
         [sys.executable, "-m", "kaggle", "kernels", "status", f"{username}/{KERNEL_SLUG}"],
         capture_output=True, text=True
@@ -146,30 +142,30 @@ def check_training_status(username: str):
     if result.returncode == 0:
         print(f"Status:\n{result.stdout}")
         kernel_url = f"https://www.kaggle.com/code/{username}/{KERNEL_SLUG}"
-        print(f"\n🔗 Full output: {kernel_url}")
+        print(f"\n[LINK] Full output: {kernel_url}")
     else:
-        print(f"❌ Could not fetch status: {result.stderr.strip()}")
+        print(f"[ERROR] Could not fetch status: {result.stderr.strip()}")
 
 
 def download_weights(username: str):
     """Download trained model weights from the Kaggle kernel output."""
-    print("\n⬇️  Downloading trained model weights...")
+    print("\n[DOWNLOAD] Downloading trained model weights...")
     weights_dir = Path(__file__).parent.parent / "backend" / "app" / "services" / "ml" / "weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
     
     result = subprocess.run(
         [sys.executable, "-m", "kaggle", "kernels", "output", f"{username}/{KERNEL_SLUG}", "-p", str(weights_dir)],
-        capture_output=True, text=True
+        capture_output=True, text=True, encoding="utf-8"
     )
     if result.returncode == 0:
-        print(f"✅ Weights downloaded to: {weights_dir}")
+        print(f"[OK] Weights downloaded to: {weights_dir}")
         h5_files = list(weights_dir.glob("*.h5"))
         if h5_files:
             print(f"   Found model files: {[f.name for f in h5_files]}")
         else:
-            print("   ⚠️  No .h5 files found yet — training may still be in progress")
+            print("   [WARN] No .h5 files found yet -- training may still be in progress")
     else:
-        print(f"❌ Download failed: {result.stderr.strip()}")
+        print(f"[ERROR] Download failed: {result.stderr.strip()}")
 
 
 def main():
@@ -197,8 +193,7 @@ def main():
         download_weights(username)
         return
 
-    # Push dataset first (contains training data)
-    push_dataset(username)
+    # Dataset push removed since the new notebook uses a synthetic generator
     
     # Then push notebook
     push_notebook(username, run_immediately=args.run)

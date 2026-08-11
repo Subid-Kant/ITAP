@@ -386,6 +386,7 @@ async def predict_threats(
 @router.post("/ml/anomaly-detect", tags=["AI/ML Engine"])
 async def detect_anomalies(
     threshold: float = 0.80,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_admin_role),
 ):
     """Run LLM-based network anomaly detection."""
@@ -393,22 +394,33 @@ async def detect_anomalies(
     anomalies = results.get("anomalies", [])
     
     # Create incidents/anomalies in DB
-    async with async_session_factory() as db:
-        for anomaly in anomalies:
-            dna = ThreatDNAFingerprinter.generate_fingerprint({"type": anomaly["classification"]})
-            anomaly["threat_dna"] = dna
-            
-            # Create an Incident if score is high
-            if anomaly["anomaly_score"] > 0.9:
-                inc = Incident(
-                    title=f"Critical Anomaly: {anomaly['classification']}",
-                    description=f"LLM detected highly anomalous pattern from {anomaly['source_ip']} (score: {anomaly['anomaly_score']}).",
-                    severity="critical",
-                    status="open",
-                    source="llm_anomaly"
-                )
-                db.add(inc)
-        await db.commit()
+    for anomaly in anomalies:
+        dna = ThreatDNAFingerprinter.generate_fingerprint({"type": anomaly["classification"]})
+        anomaly["threat_dna"] = dna
+        
+        # Save to AnomalyDetection table
+        anomaly_record = AnomalyDetection(
+            source_ip=anomaly.get("source_ip"),
+            destination_ip=anomaly.get("destination_ip"),
+            anomaly_score=anomaly.get("anomaly_score", 0.0),
+            is_anomalous=anomaly.get("is_anomalous", True),
+            features=anomaly.get("features", {}),
+            reconstruction_error=anomaly.get("reconstruction_error"),
+            pattern_fingerprint=dna.get("fingerprint") if isinstance(dna, dict) else dna
+        )
+        db.add(anomaly_record)
+        
+        # Create an Incident if score is high
+        if anomaly.get("anomaly_score", 0.0) > 0.9:
+            inc = Incident(
+                title=f"Critical Anomaly: {anomaly['classification']}",
+                description=f"LLM/Autoencoder detected highly anomalous pattern from {anomaly['source_ip']} (score: {anomaly['anomaly_score']}).",
+                severity="critical",
+                status="open",
+                source="llm_anomaly"
+            )
+            db.add(inc)
+    await db.commit()
 
     return {
         "anomalies_detected": len(anomalies),

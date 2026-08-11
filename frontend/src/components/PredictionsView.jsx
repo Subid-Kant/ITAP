@@ -10,11 +10,11 @@ export default function PredictionsView() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [mlStatus, setMlStatus] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    // We haven't added this to api.js yet, so use fetch directly for now or add it to api.js
-    fetch('http://localhost:8000/api/v1/ml/status')
-      .then(res => res.json())
+    // Fetch ML status using the authorized api client
+    api.get('/ml/status')
       .then(setMlStatus)
       .catch(console.error);
   }, []);
@@ -22,11 +22,13 @@ export default function PredictionsView() {
   const predict = async () => {
     if (!domain) return;
     setLoading(true);
+    setError(null);
     try {
       const data = await api.predict(domain);
       setResults(data);
     } catch (e) {
       console.error("Prediction failed", e);
+      setError(e.message || "An unknown error occurred");
     } finally {
       setLoading(false);
     }
@@ -49,6 +51,11 @@ export default function PredictionsView() {
         <button className="header-btn primary" onClick={predict} disabled={loading || isViewer} title={isViewer ? "Viewer mode restricted" : ""}><Brain size={14} /> {loading ? 'Analyzing...' : 'Predict Threats'}</button>
       </div>
       {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">{mlStatus?.engine || 'ML Engine'} processing...</div></div>}
+      {error && (
+        <div style={{ marginTop: 20, padding: 15, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid #EF4444', borderRadius: 8, color: '#EF4444' }}>
+          <strong>Error: </strong> {error}
+        </div>
+      )}
       {results && (
         <div className="panel fade-in">
           <div className="panel-header">

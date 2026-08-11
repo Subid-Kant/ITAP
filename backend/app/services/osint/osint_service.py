@@ -634,11 +634,50 @@ class OSINTAggregator:
         # Calculate composite risk score
         risk_score = OSINTAggregator._calculate_risk_score(shodan_data, vt_data, cve_data, otx_data, service_vuln_reports)
         
+        # ── Feature Vector Extraction for ML Engine (20 features) ──
+        open_ports_list = shodan_data.get("ports", [])
+        open_ports_count = min(len(open_ports_list) / 100.0, 1.0)
+        has_port_22 = 1.0 if 22 in open_ports_list else 0.0
+        has_port_3389 = 1.0 if 3389 in open_ports_list else 0.0
+        has_port_445 = 1.0 if 445 in open_ports_list else 0.0
+        has_port_80_443 = 1.0 if (80 in open_ports_list or 443 in open_ports_list) else 0.0
+        
+        cve_scores = [float(c.get("cvss_score", 0.0)) for c in cve_data if c.get("cvss_score")]
+        max_cvss = max(cve_scores) / 10.0 if cve_scores else 0.0
+        avg_cvss = sum(cve_scores) / len(cve_scores) / 10.0 if cve_scores else 0.0
+        cve_count = min(len(cve_data) / 50.0, 1.0)
+        exploitable_cve_count = min(sum(1 for c in cve_data if c.get("severity", "").upper() in ("HIGH", "CRITICAL")) / 20.0, 1.0)
+        
+        stats = vt_data.get("last_analysis_stats", {})
+        vt_malicious = min(stats.get("malicious", 0) / 20.0, 1.0)
+        vt_suspicious = min(stats.get("suspicious", 0) / 20.0, 1.0)
+        
+        otx_pulse_count = min(len(otx_data.get("pulse_info", {}).get("pulses", [])) / 100.0, 1.0)
+        
+        country = shodan_data.get("country", "")
+        high_risk_countries = ["Russia", "China", "Iran", "North Korea"]
+        is_high_risk_country = 1.0 if country in high_risk_countries else 0.0
+        
+        shodan_services_count = min(len(shodan_data.get("services", [])) / 50.0, 1.0)
+        
+        has_cms = 0.0 # Placeholder
+        ssl_expired = 0.0 # Placeholder
+        domain_age_days = 0.0 # Placeholder
+        
+        feature_vector = [
+            open_ports_count, has_port_22, has_port_3389, has_port_445, has_port_80_443,
+            max_cvss, avg_cvss, cve_count, exploitable_cve_count,
+            vt_malicious, vt_suspicious, otx_pulse_count, is_high_risk_country,
+            shodan_services_count, has_cms, ssl_expired, domain_age_days,
+            0.0, 0.0, 0.0
+        ]
+
         return {
             "domain": domain,
             "ip": ip,
             "scan_timestamp": datetime.utcnow().isoformat(),
             "risk_score": risk_score,
+            "feature_vector": feature_vector,
             "risk_level": "CRITICAL" if risk_score >= 85 else "HIGH" if risk_score >= 65 else "MEDIUM" if risk_score >= 40 else "LOW",
             "sources": {
                 "shodan": shodan_data,

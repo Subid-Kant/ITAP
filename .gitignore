@@ -35,3 +35,9 @@ out/
 .idea/
 *.swp
 *.swo
+
+backend/tmp_*/
+ai_training/kaggle_log_run2/
+ai_training/kaggle_output_debug*/
+backend/kaggle_logs2/
+backend/*.py

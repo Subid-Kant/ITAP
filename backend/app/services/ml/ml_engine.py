@@ -17,8 +17,8 @@ from pathlib import Path
 try:
     from app.services.ml.native_inference import NativeLSTM, NativeAutoencoder
     WEIGHTS_DIR = Path(__file__).parent / "weights"
-    lstm_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_v2.h5"))
-    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_v2.h5"))
+    lstm_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_v3.h5"))
+    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_v3.h5"))
     MODELS_LOADED = True
     print("[INFO] Successfully loaded ITAP Native ML Models")
 except Exception as e:
@@ -579,10 +579,25 @@ class LSTMPredictor:
 
                 if MODELS_LOADED:
                     # Pass features into actual LSTM model
-                    # LSTM expects (samples, time_steps, features) -> features: [cvss, complexity, privileges, interaction, age_days]
-                    # We approximate complexity, privileges, interaction as 0 for High CVSS, and age as 30
-                    x_input = np.array([[[cvss/10.0, 0.0, 0.0, 0.0, 30.0/365.0]]])
-                    probability = float(lstm_engine.predict(x_input)[0][0])
+                    # Dynamically get the expected input shape from the loaded model
+                    expected_dim = lstm_engine.lstm1[0].shape[0] if hasattr(lstm_engine, 'lstm1') else 20
+                    
+                    if "feature_vector" in osint_data:
+                        feat_vec = osint_data["feature_vector"].copy()
+                        if len(feat_vec) < expected_dim:
+                            feat_vec += [0.0] * (expected_dim - len(feat_vec))
+                        else:
+                            feat_vec = feat_vec[:expected_dim]
+                        x_input = np.array([[feat_vec]])
+                    else:
+                        base_features = [cvss/10.0, 0.0, 0.0, 0.0, 30.0/365.0]
+                        padded_features = base_features + [0.0] * (expected_dim - len(base_features))
+                        x_input = np.array([[padded_features]])
+
+                    
+                    # Output is now a 10-class softmax array. We take the max probability as the exploit threat.
+                    raw_prediction = lstm_engine.predict(x_input)[0]
+                    probability = float(np.max(raw_prediction))
 
                 attack_type = LSTMPredictor._classify_attack(cve_desc)
                 rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc, target_domain=domain, osint_data=osint_data)
@@ -777,13 +792,27 @@ class AutoencoderDetector:
             if MODELS_LOADED:
                 # 5 input features for AE: src_bytes, dst_bytes, count, duration, entropy
                 # Scale them down roughly to 0-1 for the autoencoder input
-                x_in = np.array([[
+                base_ae_features = [
                     min(features.get("byte_rate", 0)/20000, 1.0),
                     min(features.get("packet_size_mean", 0)/2000, 1.0),
                     min(features.get("packet_count", 0)/2000, 1.0),
                     min(features.get("duration", 0)/10, 1.0),
                     min(features.get("payload_entropy", 0)/8, 1.0)
-                ]])
+                ]
+                # Dynamically get the expected input shape from the loaded model
+                expected_ae_dim = ae_engine.weights[0][0].shape[0] if hasattr(ae_engine, 'weights') else 20
+                
+                if traffic_data and "feature_vector" in traffic_data:
+                    feat_vec = traffic_data["feature_vector"].copy()
+                    if len(feat_vec) < expected_ae_dim:
+                        feat_vec += [0.0] * (expected_ae_dim - len(feat_vec))
+                    else:
+                        feat_vec = feat_vec[:expected_ae_dim]
+                    x_in = np.array([feat_vec])
+                else:
+                    padded_ae_features = base_ae_features + [0.0] * (expected_ae_dim - len(base_ae_features))
+                    x_in = np.array([padded_ae_features])
+                
                 x_out = ae_engine.predict(x_in)
                 # Anomaly score is the Mean Squared Error of the reconstruction
                 anomaly_score = float(np.mean(np.square(x_in - x_out)))
