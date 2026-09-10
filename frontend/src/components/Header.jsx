@@ -1,5 +1,7 @@
-import { RefreshCw, Scan, Download, Command } from 'lucide-react';
+import { Scan, Download, Command, Clock } from 'lucide-react';
+import { useState } from 'react';
 import { api } from '../api';
+import SchedulerDropdown from './SchedulerDropdown';
 
 const VIEW_TITLES = {
   posture:     ['Security Posture',        'AI-driven executive intelligence summary'],
@@ -18,8 +20,9 @@ const VIEW_TITLES = {
   reports:     ['Reports',                 'Generate and download SOC reports'],
 };
 
-export default function Header({ activeView, onRefresh, onScan, onNewSession, isLive, user, onOpenPalette }) {
+export default function Header({ activeView, onRefresh, onScan, onNewSession, isLive, user, onOpenPalette, scheduler, onSchedulerStart, onSchedulerStop }) {
   const [title, subtitle] = VIEW_TITLES[activeView] || ['ITAP', 'Integrated Threat Assessment Platform'];
+  const [showScheduler, setShowScheduler] = useState(false);
 
   return (
     <header className="header">
@@ -52,9 +55,35 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession, is
         <button className="header-btn" onClick={() => api.downloadReport(7)} title="Export Report">
           <Download size={14} /> Export
         </button>
-        <button className="header-btn" onClick={onRefresh} title="Refresh data">
-          <RefreshCw size={14} /> Refresh
-        </button>
+
+        {/* Scheduler Button */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className="header-btn"
+            onClick={() => setShowScheduler(s => !s)}
+            title="Scan Scheduler"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}
+          >
+            <Clock size={14} />
+            Scheduler
+            {scheduler?.active && (
+              <div style={{
+                width: 7, height: 7, borderRadius: '50%', background: '#22C55E',
+                animation: 'pulse 2s ease-in-out infinite',
+                position: 'absolute', top: 4, right: 4,
+              }} />
+            )}
+          </button>
+          {showScheduler && (
+            <SchedulerDropdown
+              scheduler={scheduler || { active: false, domain: '', intervalMs: 60000, scanHistory: [], totalScans: 0 }}
+              onStart={onSchedulerStart}
+              onStop={onSchedulerStop}
+              onClose={() => setShowScheduler(false)}
+            />
+          )}
+        </div>
+
         <button className="header-btn" onClick={onNewSession} title="Archive current data and start fresh">
           New Session
         </button>

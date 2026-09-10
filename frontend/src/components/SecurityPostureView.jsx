@@ -1,6 +1,6 @@
-import { ShieldCheck, AlertCircle, Info, Activity, ShieldAlert } from 'lucide-react';
+import { ShieldCheck, AlertCircle, Info, Activity, ShieldAlert, Clock } from 'lucide-react';
 
-export default function SecurityPostureView({ stats }) {
+export default function SecurityPostureView({ stats, scheduler }) {
   if (!stats) return null;
 
   const score = 100 - (stats.critical_threats * 15 + stats.active_threats * 5 + stats.open_incidents * 10);
@@ -40,13 +40,28 @@ export default function SecurityPostureView({ stats }) {
                 ? "Moderate risk detected. Multiple active threats are being correlated across OSINT sources. AI models predict potential escalation in the next 48 hours."
                 : "CRITICAL ALERT: Your security posture is severely compromised. Immediate remediation of critical incidents is required to prevent further lateral movement and data exfiltration."}
             </p>
-            <div style={{ display: 'flex', gap: 16, marginTop: 20 }}>
+            <div style={{ display: 'flex', gap: 16, marginTop: 20, flexWrap: 'wrap' }}>
               <div className="glass" style={{ padding: '8px 16px', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                 <Activity size={14} color="var(--accent-blue)" /> <span>Real-time Monitoring Active</span>
               </div>
               <div className="glass" style={{ padding: '8px 16px', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                 <ShieldCheck size={14} color="var(--accent-green)" /> <span>Compliance: PCI-DSS, ISO27001</span>
               </div>
+              {scheduler?.active && (
+                <div className="glass" style={{
+                  padding: '8px 16px', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12,
+                  border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.06)',
+                }}>
+                  <Clock size={14} color="#8B5CF6" />
+                  <div style={{
+                    width: 6, height: 6, borderRadius: '50%', background: '#22C55E',
+                    animation: 'pulse 2s ease-in-out infinite',
+                  }} />
+                  <span style={{ color: '#8B5CF6', fontWeight: 600 }}>
+                    Scheduler Active — {scheduler.totalScans} scan{scheduler.totalScans !== 1 ? 's' : ''}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
