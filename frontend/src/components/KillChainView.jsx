@@ -5,6 +5,10 @@ import {
   ChevronDown, ChevronUp, Copy, Check, RefreshCw
 } from 'lucide-react';
 import { api } from '../api';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import AnimatedButton from './ui/AnimatedButton';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const PHASES = [
   'Reconnaissance', 'Resource Development', 'Initial Access', 'Execution',
@@ -299,7 +303,7 @@ export default function KillChainView({ stats }) {
           <div style={{ fontSize: 20, fontWeight: 800, color: '#F59E0B' }}>{dwellDays}d</div>
           <div style={{ fontSize: 9, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 1 }}>Est. Dwell</div>
         </div>
-        <button
+        <AnimatedButton
           onClick={() => setRefreshKey(k => k + 1)}
           disabled={loading}
           style={{
@@ -310,14 +314,14 @@ export default function KillChainView({ stats }) {
           }}
         >
           <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
-        </button>
+        </AnimatedButton>
       </div>
 
       {/* ── Kill Chain Phase Strip ── */}
-      <div className="panel">
+      <HoverCard className="panel" tiltFactor={1}>
         <div className="panel-body" style={{ padding: '12px 16px' }}>
           <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 'max-content' }}>
+            <StaggeredList style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 'max-content' }}>
               {PHASES.map((phase, idx) => {
                 const isCompleted = idx < currentIdx;
                 const isCurrent   = idx === currentIdx;
@@ -327,14 +331,15 @@ export default function KillChainView({ stats }) {
                 let borderColor = 'rgba(255,255,255,0.07)';
                 let bg = 'rgba(17,21,32,0.8)';
                 let numColor = '#4B5563';
-                if (isCompleted) { borderColor = '#FF3B5C'; bg = 'rgba(255,59,92,0.1)'; numColor = '#FF3B5C'; }
-                if (isCurrent)   { borderColor = '#F59E0B'; bg = 'rgba(245,158,11,0.15)'; numColor = '#F59E0B'; }
-                if (isPredicted) { borderColor = '#378ADD'; bg = 'rgba(55,138,221,0.08)'; numColor = '#378ADD'; }
-                if (isSelected)  { borderColor = '#A78BFA'; bg = 'rgba(167,139,250,0.18)'; }
+                let glowColor = 'transparent';
+                if (isCompleted) { borderColor = '#FF3B5C'; bg = 'rgba(255,59,92,0.1)'; numColor = '#FF3B5C'; glowColor = '#FF3B5C'; }
+                if (isCurrent)   { borderColor = '#F59E0B'; bg = 'rgba(245,158,11,0.15)'; numColor = '#F59E0B'; glowColor = '#F59E0B'; }
+                if (isPredicted) { borderColor = '#378ADD'; bg = 'rgba(55,138,221,0.08)'; numColor = '#378ADD'; glowColor = '#378ADD'; }
+                if (isSelected)  { borderColor = '#A78BFA'; bg = 'rgba(167,139,250,0.18)'; glowColor = '#A78BFA'; }
 
                 return (
-                  <div key={phase} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                    <div
+                  <StaggeredItem key={phase} style={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative' }}>
+                    <motion.div
                       onClick={() => setSelectedPhaseIdx(idx)}
                       title={phase}
                       style={{
@@ -343,12 +348,12 @@ export default function KillChainView({ stats }) {
                         borderRadius: 8, border: `1px ${isPredicted && !isSelected ? 'dashed' : 'solid'} ${borderColor}`,
                         background: bg,
                         cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        transform: isSelected ? 'translateY(-2px)' : 'none',
                         boxShadow: isSelected ? `0 4px 14px rgba(167,139,250,0.3)` : isCurrent ? '0 0 10px rgba(245,158,11,0.2)' : 'none',
                         outline: isSelected ? '2px solid #A78BFA' : 'none',
                         outlineOffset: 2,
                       }}
+                      whileHover={{ scale: 1.05, y: -2, boxShadow: `0 0 15px ${glowColor}60` }}
+                      transition={{ type: 'spring', stiffness: 400, damping: 25 }}
                     >
                       <div style={{ fontSize: 11, fontWeight: 700, color: numColor }}>{idx + 1}</div>
                       <div style={{ fontSize: 8, fontWeight: 600, textTransform: 'uppercase', textAlign: 'center',
@@ -361,14 +366,22 @@ export default function KillChainView({ stats }) {
                         <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#F59E0B',
                           boxShadow: '0 0 6px #F59E0B', animation: 'pulse-amber 2s infinite' }} />
                       )}
-                    </div>
+                    </motion.div>
                     {idx < PHASES.length - 1 && (
                       <ChevronRight size={11} color={idx < currentIdx ? '#FF3B5C' : '#2D3748'} />
                     )}
-                  </div>
+                    {isCompleted && idx < PHASES.length - 1 && (
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: 12 }}
+                        transition={{ duration: 0.5, delay: idx * 0.1 }}
+                        style={{ height: 2, background: '#FF3B5C', position: 'absolute', right: -12, zIndex: -1, boxShadow: '0 0 5px #FF3B5C' }}
+                      />
+                    )}
+                  </StaggeredItem>
                 );
               })}
-            </div>
+            </StaggeredList>
           </div>
 
           {/* Legend */}
@@ -385,13 +398,13 @@ export default function KillChainView({ stats }) {
             ))}
           </div>
         </div>
-      </div>
+      </HoverCard>
 
       {/* ── Selected Phase Detail + Prediction Table ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
 
         {/* LEFT: Selected Phase Detail */}
-        <div className="panel" style={{ display: 'flex', flexDirection: 'column' }}>
+        <HoverCard className="panel" style={{ display: 'flex', flexDirection: 'column' }}>
           <div className="panel-header">
             <div className="panel-title">
               <Zap size={15} />
@@ -411,40 +424,45 @@ export default function KillChainView({ stats }) {
           </div>
 
           <div className="panel-body" style={{ flex: 1, overflowY: 'auto', maxHeight: 480 }}>
-            {loading && !killChainData ? (
-              <div className="scanning"><div className="scanning-ring" /></div>
-            ) : selectedPhaseData ? (
-              <PhaseDetailPanel
-                phaseData={selectedPhaseData}
-                isCompleted={isSelectedCompleted}
-                isCurrent={isSelectedCurrent}
-              />
-            ) : (
-              <div style={{ textAlign: 'center', padding: 30, color: '#4B5563' }}>
-                <Activity size={30} style={{ marginBottom: 10, opacity: 0.4 }} />
-                <div style={{ fontSize: 12 }}>Click a phase above to see detailed commands and measures</div>
-              </div>
-            )}
-
-            {/* Root Cause if from real threat */}
-            {isSelectedCurrent && killChainData?.root_cause && (
-              <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(255,59,92,0.07)', borderRadius: 8, border: '1px solid rgba(255,59,92,0.2)' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#FF3B5C', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>
-                  🔍 Root Cause (from Active Threat)
-                </div>
-                <p style={{ fontSize: 11, color: '#B4B2A9', lineHeight: 1.6, margin: 0 }}>
-                  {killChainData.root_cause}
-                </p>
-              </div>
-            )}
+            <AnimatePresence mode="wait">
+              {loading && !killChainData ? (
+                <motion.div key="loading" className="scanning" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  <div className="scanning-ring" />
+                </motion.div>
+              ) : selectedPhaseData ? (
+                <motion.div key="data" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}>
+                  <PhaseDetailPanel
+                    phaseData={selectedPhaseData}
+                    isCompleted={isSelectedCompleted}
+                    isCurrent={isSelectedCurrent}
+                  />
+                  {/* Root Cause if from real threat */}
+                  {isSelectedCurrent && killChainData?.root_cause && (
+                    <div style={{ marginTop: 12, padding: '10px 12px', background: 'rgba(255,59,92,0.07)', borderRadius: 8, border: '1px solid rgba(255,59,92,0.2)' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#FF3B5C', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 5 }}>
+                        🔍 Root Cause (from Active Threat)
+                      </div>
+                      <p style={{ fontSize: 11, color: '#B4B2A9', lineHeight: 1.6, margin: 0 }}>
+                        {killChainData.root_cause}
+                      </p>
+                    </div>
+                  )}
+                </motion.div>
+              ) : (
+                <motion.div key="empty" style={{ textAlign: 'center', padding: 30, color: '#4B5563' }} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  <Activity size={30} style={{ marginBottom: 10, opacity: 0.4 }} />
+                  <div style={{ fontSize: 12 }}>Click a phase above to see detailed commands and measures</div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
-        </div>
+        </HoverCard>
 
         {/* RIGHT: AI Prediction Table + Defensive Actions */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
           {/* Prediction Table */}
-          <div className="panel">
+          <HoverCard className="panel">
             <div className="panel-header">
               <div className="panel-title"><Activity size={15} /> AI Prediction: Next Phases</div>
               <span style={{ fontSize: 10, color: '#6B7280' }}>Click row to inspect</span>
@@ -515,10 +533,10 @@ export default function KillChainView({ stats }) {
                 </table>
               )}
             </div>
-          </div>
+          </HoverCard>
 
           {/* Immediate Action Card */}
-          <div className="panel">
+          <HoverCard className="panel">
             <div className="panel-header">
               <div className="panel-title"><ShieldAlert size={15} /> Immediate Actions Now</div>
               <span style={{ fontSize: 10, color: '#F59E0B' }}>For: {currentPhase}</span>
@@ -555,7 +573,7 @@ export default function KillChainView({ stats }) {
                 <div style={{ color: '#4B5563', fontSize: 12 }}>Loading action data…</div>
               )}
             </div>
-          </div>
+          </HoverCard>
 
         </div>
       </div>

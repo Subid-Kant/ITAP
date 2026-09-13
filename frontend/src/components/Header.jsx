@@ -1,4 +1,6 @@
 import { Scan, Download, Command, Clock } from 'lucide-react';
+import { motion } from 'framer-motion';
+import AnimatedButton from './ui/AnimatedButton';
 import { useState } from 'react';
 import { api } from '../api';
 import SchedulerDropdown from './SchedulerDropdown';
@@ -42,7 +44,7 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession, is
       <div className="header-right">
         {/* Command Palette trigger */}
         {onOpenPalette && (
-          <button
+          <AnimatedButton
             className="header-btn"
             onClick={onOpenPalette}
             title="Open Command Palette (Ctrl+K)"
@@ -50,15 +52,19 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession, is
           >
             <Command size={13} />
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Ctrl+K</span>
-          </button>
+          </AnimatedButton>
         )}
-        <button className="header-btn" onClick={() => api.downloadReport(7)} title="Export Report">
+        <AnimatedButton 
+          className="header-btn" 
+          onClick={() => api.downloadReport(7)} 
+          title="Export Report"
+        >
           <Download size={14} /> Export
-        </button>
+        </AnimatedButton>
 
         {/* Scheduler Button */}
         <div style={{ position: 'relative' }}>
-          <button
+          <AnimatedButton
             className="header-btn"
             onClick={() => setShowScheduler(s => !s)}
             title="Scan Scheduler"
@@ -73,7 +79,7 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession, is
                 position: 'absolute', top: 4, right: 4,
               }} />
             )}
-          </button>
+          </AnimatedButton>
           {showScheduler && (
             <SchedulerDropdown
               scheduler={scheduler || { active: false, domain: '', intervalMs: 60000, scanHistory: [], totalScans: 0 }}
@@ -84,12 +90,20 @@ export default function Header({ activeView, onRefresh, onScan, onNewSession, is
           )}
         </div>
 
-        <button className="header-btn" onClick={onNewSession} title="Archive current data and start fresh">
+        <AnimatedButton 
+          className="header-btn" 
+          onClick={onNewSession} 
+          title="Archive current data and start fresh"
+        >
           New Session
-        </button>
-        <button className="header-btn primary" onClick={onScan}>
+        </AnimatedButton>
+        <AnimatedButton 
+          className="header-btn primary" 
+          onClick={onScan}
+          variant="primary"
+        >
           <Scan size={14} /> New Scan
-        </button>
+        </AnimatedButton>
       </div>
     </header>
   );

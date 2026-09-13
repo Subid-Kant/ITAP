@@ -55,6 +55,9 @@ class TargetResponse(BaseModel):
 class ScanRequest(BaseModel):
     target_id: str
     scan_types: List[str] = Field(default=["shodan", "virustotal", "cve"])
+    nmap_enabled: bool = Field(default=False, description="Enable active Nmap scanning")
+    nmap_scan_type: str = Field(default="standard", description="Nmap scan type: quick, standard, or deep")
+
 
 
 class ScanResponse(BaseModel):

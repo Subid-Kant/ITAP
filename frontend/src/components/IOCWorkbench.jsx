@@ -2,6 +2,10 @@ import { useState, useRef } from 'react';
 import { Search, Upload, Shield, Globe, Hash, Link, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, Copy } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from './ToastNotification';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import AnimatedButton from './ui/AnimatedButton';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const IOC_TYPES = [
   { value: 'domain', label: 'Domain', icon: Globe },
@@ -29,7 +33,7 @@ function IOCCard({ result, onCopy }) {
   const riskColor = risk >= 80 ? 'var(--severity-critical)' : risk >= 60 ? 'var(--severity-high)' : risk >= 40 ? 'var(--severity-medium)' : 'var(--accent-green)';
 
   return (
-    <div className="panel ioc-card" style={{ marginBottom: 12, borderColor: `${riskColor}33` }}>
+    <HoverCard className="panel ioc-card" style={{ marginBottom: 12, borderColor: `${riskColor}33` }} tiltFactor={1}>
       <div className="ioc-card-header" onClick={() => setExpanded(e => !e)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1 }}>
           <div className="ioc-risk-badge" style={{ background: `${riskColor}22`, borderColor: riskColor, color: riskColor }}>
@@ -55,9 +59,10 @@ function IOCCard({ result, onCopy }) {
         </div>
       </div>
 
-      {expanded && (
-        <div className="ioc-card-body">
-          <div className="ioc-grid">
+      <AnimatePresence>
+        {expanded && (
+          <motion.div className="ioc-card-body" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
+            <div className="ioc-grid">
             <div className="ioc-field">
               <div className="ioc-field-label">Confidence</div>
               <ConfidenceMeter score={result.confidence || 0} />
@@ -69,13 +74,13 @@ function IOCCard({ result, onCopy }) {
             <div className="ioc-field">
               <div className="ioc-field-label">First Seen</div>
               <div className="ioc-field-value" style={{ fontFamily: "'JetBrains Mono'" }}>
-                {result.first_seen ? new Date(result.first_seen).toLocaleDateString() : '—'}
+                {result.first_seen ? new Date(result.first_seen + 'Z').toLocaleDateString() : '—'}
               </div>
             </div>
             <div className="ioc-field">
               <div className="ioc-field-label">Last Seen</div>
               <div className="ioc-field-value" style={{ fontFamily: "'JetBrains Mono'" }}>
-                {result.last_seen ? new Date(result.last_seen).toLocaleDateString() : '—'}
+                {result.last_seen ? new Date(result.last_seen + 'Z').toLocaleDateString() : '—'}
               </div>
             </div>
             {result.geolocation && (
@@ -110,11 +115,12 @@ function IOCCard({ result, onCopy }) {
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </HoverCard>
   );
 }
 
@@ -177,14 +183,14 @@ export default function IOCWorkbench() {
 
   return (
     <div className="fade-in">
-      <div className="panel" style={{ marginBottom: 20 }}>
+      <HoverCard className="panel" style={{ marginBottom: 20 }}>
         <div className="panel-header">
           <div className="panel-title"><Search size={16} /> IOC Enrichment Workbench</div>
           <div style={{ display: 'flex', gap: 8 }}>
             {['single', 'bulk'].map(m => (
-              <button key={m} className={`tab-btn ${mode === m ? 'active' : ''}`} onClick={() => setMode(m)}>
+              <AnimatedButton key={m} className={`tab-btn ${mode === m ? 'active' : ''}`} onClick={() => setMode(m)}>
                 {m === 'single' ? 'Single IOC' : 'Bulk Import'}
-              </button>
+              </AnimatedButton>
             ))}
           </div>
         </div>
@@ -193,11 +199,11 @@ export default function IOCWorkbench() {
           {/* IOC Type Selector */}
           <div className="ioc-type-row">
             {IOC_TYPES.map(t => (
-              <button key={t.value} className={`ioc-type-btn ${iocType === t.value ? 'active' : ''}`}
+              <AnimatedButton key={t.value} className={`ioc-type-btn ${iocType === t.value ? 'active' : ''}`}
                 onClick={() => setIocType(t.value)}>
                 <t.icon size={13} />
                 {t.label}
-              </button>
+              </AnimatedButton>
             ))}
           </div>
 
@@ -212,10 +218,10 @@ export default function IOCWorkbench() {
                 onChange={e => setIndicator(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleSingle()}
               />
-              <button className="header-btn primary" onClick={handleSingle} disabled={loading || !indicator.trim()}>
+              <AnimatedButton className="header-btn primary" onClick={handleSingle} disabled={loading || !indicator.trim()}>
                 <Search size={14} />
                 {loading ? 'Enriching...' : 'Enrich IOC'}
-              </button>
+              </AnimatedButton>
             </div>
           ) : (
             <div style={{ marginTop: 12 }}>
@@ -227,19 +233,19 @@ export default function IOCWorkbench() {
                 rows={6}
               />
               <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                <button className="header-btn" onClick={() => fileRef.current?.click()}>
+                <AnimatedButton className="header-btn" onClick={() => fileRef.current?.click()}>
                   <Upload size={14} /> Import File
-                </button>
+                </AnimatedButton>
                 <input ref={fileRef} type="file" accept=".txt,.csv" style={{ display: 'none' }} onChange={handleFile} />
-                <button className="header-btn primary" onClick={handleBulk}
+                <AnimatedButton className="header-btn primary" onClick={handleBulk}
                   disabled={loading || !bulkText.trim()}>
                   <Search size={14} /> {loading ? 'Processing...' : `Enrich ${bulkText.split('\n').filter(l => l.trim()).length} IOCs`}
-                </button>
+                </AnimatedButton>
               </div>
             </div>
           )}
         </div>
-      </div>
+      </HoverCard>
 
       {/* Results */}
       {results.length > 0 && (
@@ -249,24 +255,28 @@ export default function IOCWorkbench() {
               <CheckCircle size={14} color="var(--accent-green)" style={{ marginRight: 6 }} />
               {results.length} IOC{results.length !== 1 ? 's' : ''} enriched
             </div>
-            <button className="header-btn" style={{ padding: '4px 10px', fontSize: 12 }}
+            <AnimatedButton className="header-btn" style={{ padding: '4px 10px', fontSize: 12 }}
               onClick={() => setResults([])}>
               Clear Results
-            </button>
+            </AnimatedButton>
           </div>
-          {results.map((r, i) => (
-            <IOCCard key={`${r.indicator}-${i}`} result={r} onCopy={handleCopy} />
-          ))}
+          <StaggeredList>
+            {results.map((r, i) => (
+              <StaggeredItem key={`${r.indicator}-${i}`}>
+                <IOCCard result={r} onCopy={handleCopy} />
+              </StaggeredItem>
+            ))}
+          </StaggeredList>
         </div>
       )}
 
       {results.length === 0 && (
-        <div className="panel" style={{ padding: 40, textAlign: 'center' }}>
+        <HoverCard className="panel" style={{ padding: 40, textAlign: 'center' }}>
           <Shield size={48} color="var(--text-muted)" style={{ marginBottom: 16 }} />
           <div style={{ color: 'var(--text-muted)', fontSize: 14 }}>
             Enter an IP, domain, file hash, or URL above to enrich with cross-source threat intelligence
           </div>
-        </div>
+        </HoverCard>
       )}
     </div>
   );

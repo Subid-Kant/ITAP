@@ -6,6 +6,11 @@ import {
 import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { api } from '../api';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import AnimatedButton from './ui/AnimatedButton';
+import { motion } from 'framer-motion';
+
 
 const SEV_COLOR = {
   critical: '#FF3B5C',
@@ -199,75 +204,85 @@ export default function GeoMapView() {
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
       {/* ── Top Stats Bar ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+      <StaggeredList style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
 
         {/* Host Card */}
-        <div style={cardStyle('#378ADD')}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ color: '#378ADD', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Your Machine</div>
-              <div style={{ color: '#F0EFE9', fontSize: 16, fontWeight: 700, marginTop: 4, fontFamily: 'monospace' }}>{hostIP}</div>
-              <div style={{ color: '#8892B0', fontSize: 12, marginTop: 2 }}>{hostCity}, {scanData?.host?.country || '…'}</div>
-              <div style={{ color: '#4A5568', fontSize: 10, marginTop: 2 }}>{scanData?.os_info?.system || ''} {scanData?.os_info?.release || ''}</div>
+        <StaggeredItem>
+          <HoverCard style={cardStyle('#378ADD')} tiltFactor={4} glare>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ color: '#378ADD', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Your Machine</div>
+                <div style={{ color: '#F0EFE9', fontSize: 16, fontWeight: 700, marginTop: 4, fontFamily: 'monospace' }}>{hostIP}</div>
+                <div style={{ color: '#8892B0', fontSize: 12, marginTop: 2 }}>{hostCity}, {scanData?.host?.country || '…'}</div>
+                <div style={{ color: '#4A5568', fontSize: 10, marginTop: 2 }}>{scanData?.os_info?.system || ''} {scanData?.os_info?.release || ''}</div>
+              </div>
+              <Server size={20} color="#378ADD" style={{ opacity: 0.7 }} />
             </div>
-            <Server size={20} color="#378ADD" style={{ opacity: 0.7 }} />
-          </div>
-        </div>
+          </HoverCard>
+        </StaggeredItem>
 
         {/* Risk Score */}
-        <div style={cardStyle(RISK_GRADIENT(riskScore))}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <RiskGauge score={riskScore} />
-            <div>
-              <div style={{ color: '#8892B0', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Risk Score</div>
-              <div style={{ color: RISK_GRADIENT(riskScore), fontSize: 13, fontWeight: 700, marginTop: 4 }}>
-                {riskScore >= 75 ? 'CRITICAL' : riskScore >= 50 ? 'HIGH' : riskScore >= 25 ? 'MEDIUM' : 'LOW'}
+        <StaggeredItem>
+          <HoverCard style={cardStyle(RISK_GRADIENT(riskScore))} tiltFactor={4} glare>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <RiskGauge score={riskScore} />
+              <div>
+                <div style={{ color: '#8892B0', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>Risk Score</div>
+                <div style={{ color: RISK_GRADIENT(riskScore), fontSize: 13, fontWeight: 700, marginTop: 4 }}>
+                  {riskScore >= 75 ? 'CRITICAL' : riskScore >= 50 ? 'HIGH' : riskScore >= 25 ? 'MEDIUM' : 'LOW'}
+                </div>
+                <div style={{ color: '#64748B', fontSize: 11, marginTop: 2 }}>{scanData?.total_connections || 0} connections mapped</div>
               </div>
-              <div style={{ color: '#64748B', fontSize: 11, marginTop: 2 }}>{scanData?.total_connections || 0} connections mapped</div>
             </div>
-          </div>
-        </div>
+          </HoverCard>
+        </StaggeredItem>
 
         {/* Malicious */}
-        <div style={cardStyle('#FF3B5C')}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ color: '#FF3B5C', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Malicious</div>
-              <div style={{ color: '#F0EFE9', fontSize: 28, fontWeight: 800, lineHeight: 1, marginTop: 4 }}>{scanData?.malicious_count ?? '—'}</div>
-              <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Confirmed threats</div>
+        <StaggeredItem>
+          <HoverCard style={cardStyle('#FF3B5C')} tiltFactor={4} glare>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ color: '#FF3B5C', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Malicious</div>
+                <div style={{ color: '#F0EFE9', fontSize: 28, fontWeight: 800, lineHeight: 1, marginTop: 4 }}>{scanData?.malicious_count ?? '—'}</div>
+                <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Confirmed threats</div>
+              </div>
+              <ShieldAlert size={20} color="#FF3B5C" style={{ opacity: 0.7 }} />
             </div>
-            <ShieldAlert size={20} color="#FF3B5C" style={{ opacity: 0.7 }} />
-          </div>
-        </div>
+          </HoverCard>
+        </StaggeredItem>
 
         {/* Suspicious */}
-        <div style={cardStyle('#F97316')}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ color: '#F97316', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Suspicious</div>
-              <div style={{ color: '#F0EFE9', fontSize: 28, fontWeight: 800, lineHeight: 1, marginTop: 4 }}>{scanData?.suspicious_count ?? '—'}</div>
-              <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Flagged connections</div>
+        <StaggeredItem>
+          <HoverCard style={cardStyle('#F97316')} tiltFactor={4} glare>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ color: '#F97316', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Suspicious</div>
+                <div style={{ color: '#F0EFE9', fontSize: 28, fontWeight: 800, lineHeight: 1, marginTop: 4 }}>{scanData?.suspicious_count ?? '—'}</div>
+                <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Flagged connections</div>
+              </div>
+              <AlertTriangle size={20} color="#F97316" style={{ opacity: 0.7 }} />
             </div>
-            <AlertTriangle size={20} color="#F97316" style={{ opacity: 0.7 }} />
-          </div>
-        </div>
+          </HoverCard>
+        </StaggeredItem>
 
         {/* Top Threat Origin */}
-        <div style={cardStyle('#A78BFA')}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <div style={{ color: '#A78BFA', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Top Origin</div>
-              <div style={{ color: '#F0EFE9', fontSize: 15, fontWeight: 700, marginTop: 4 }}>{topThreatCountry}</div>
-              <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Highest threat country</div>
+        <StaggeredItem>
+          <HoverCard style={cardStyle('#A78BFA')} tiltFactor={4} glare>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ color: '#A78BFA', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Top Origin</div>
+                <div style={{ color: '#F0EFE9', fontSize: 15, fontWeight: 700, marginTop: 4 }}>{topThreatCountry}</div>
+                <div style={{ color: '#8892B0', fontSize: 11, marginTop: 4 }}>Highest threat country</div>
+              </div>
+              <Globe size={20} color="#A78BFA" style={{ opacity: 0.7 }} />
             </div>
-            <Globe size={20} color="#A78BFA" style={{ opacity: 0.7 }} />
-          </div>
-        </div>
+          </HoverCard>
+        </StaggeredItem>
 
-      </div>
+      </StaggeredList>
 
       {/* ── Main Map Panel (Leaflet) ── */}
-      <div className="panel">
+      <HoverCard className="panel" tiltFactor={1}>
         <div className="panel-header">
           <div className="panel-title">
             <Map size={16} />
@@ -287,25 +302,25 @@ export default function GeoMapView() {
             </div>
 
             {/* View toggle */}
-            <button
+            <AnimatedButton
               onClick={() => setViewMode(v => v === 'machine' ? 'global' : 'machine')}
               style={btnStyle('#378ADD')}
             >
               {viewMode === 'machine' ? <><Globe size={12}/> Global KEV</> : <><Server size={12}/> My Machine</>}
-            </button>
+            </AnimatedButton>
 
             {/* Refresh */}
-            <button onClick={fetchData} style={btnStyle('#4A5568')} title="Refresh now">
+            <AnimatedButton onClick={fetchData} style={btnStyle('#4A5568')} title="Refresh now">
               <RefreshCw size={12} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-            </button>
+            </AnimatedButton>
 
             {/* Auto-refresh toggle */}
-            <button
+            <AnimatedButton
               onClick={() => setAutoRefresh(a => !a)}
               style={btnStyle(autoRefresh ? '#22C55E' : '#4A5568')}
             >
               <Zap size={12}/> {autoRefresh ? 'Auto' : 'Manual'}
-            </button>
+            </AnimatedButton>
           </div>
         </div>
 
@@ -315,7 +330,7 @@ export default function GeoMapView() {
           {viewMode === 'machine' && (
             <div style={{ position: 'absolute', top: 12, left: 12, zIndex: 1000, display: 'flex', gap: 6 }}>
               {['all', 'malicious', 'suspicious', 'safe'].map(f => (
-                <button
+                <AnimatedButton
                   key={f}
                   onClick={() => setFilter(f)}
                   style={{
@@ -329,7 +344,7 @@ export default function GeoMapView() {
                   }}
                 >
                   {f}
-                </button>
+                </AnimatedButton>
               ))}
             </div>
           )}
@@ -545,7 +560,7 @@ export default function GeoMapView() {
             </MapContainer>
           </div>
         </div>
-      </div>
+      </HoverCard>
 
       {/* ── Connection Details Table ── */}
       <div className="panel">
@@ -586,7 +601,7 @@ export default function GeoMapView() {
                   )}
                 </tr>
               </thead>
-              <tbody>
+              <StaggeredList component="tbody" delay={0.03}>
                 {viewMode === 'machine' && machineConns.length === 0 && !loading && (
                   <tr>
                     <td colSpan={7} style={{ textAlign: 'center', color: '#64748B', padding: 24 }}>
@@ -595,7 +610,7 @@ export default function GeoMapView() {
                   </tr>
                 )}
                 {viewMode === 'machine' && machineConns.map((c, i) => (
-                  <tr key={i} style={{
+                  <StaggeredItem key={i} component="tr" style={{
                     borderLeft: `3px solid ${CLS_COLOR[c.classification] || '#22C55E'}`,
                     background: c.classification === 'MALICIOUS' ? 'rgba(255,59,92,0.04)' : c.classification === 'SUSPICIOUS' ? 'rgba(249,115,22,0.04)' : 'transparent',
                   }}>
@@ -612,22 +627,22 @@ export default function GeoMapView() {
                     <td style={{ color: '#94A3B8', fontSize: 12, fontFamily: 'monospace' }}>{c.process || '—'}</td>
                     <td style={{ color: '#64748B', fontSize: 11, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.org}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: 11, color: '#4A5568' }}>{c.lat?.toFixed(3)}, {c.lon?.toFixed(3)}</td>
-                  </tr>
+                  </StaggeredItem>
                 ))}
 
                 {viewMode === 'global' && globalThreats.map((t, i) => (
-                  <tr key={i} style={{ borderLeft: '3px solid #FF3B5C', background: 'rgba(255,59,92,0.03)' }}>
+                  <StaggeredItem key={i} component="tr" style={{ borderLeft: '3px solid #FF3B5C', background: 'rgba(255,59,92,0.03)' }}>
                     <td><Badge label="CRITICAL" color="#FF3B5C" /></td>
                     <td style={{ fontFamily: 'monospace', fontSize: 12, color: '#FF3B5C', fontWeight: 700 }}>{t.title}</td>
                     <td style={{ color: '#8892B0', fontSize: 11, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.desc}</td>
                     <td style={{ color: '#F0EFE9' }}>📍 {t.country}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: 11, color: '#4A5568' }}>{t.lat?.toFixed(3)}, {t.lon?.toFixed(3)}</td>
-                  </tr>
+                  </StaggeredItem>
                 ))}
                 {viewMode === 'global' && globalThreats.length === 0 && (
                   <tr><td colSpan={5} style={{ textAlign: 'center', color: '#64748B', padding: 24 }}>Loading CISA KEV feed…</td></tr>
                 )}
-              </tbody>
+              </StaggeredList>
             </table>
           </div>
         </div>
@@ -660,8 +675,9 @@ export default function GeoMapView() {
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes map-pulse {
-          0% { transform: scale(0.8); opacity: 0.8; }
-          100% { transform: scale(2.5); opacity: 0; }
+          0% { transform: scale(0.5); opacity: 1; box-shadow: 0 0 0 0 rgba(255, 59, 92, 0.7); }
+          50% { transform: scale(1.5); opacity: 0.5; box-shadow: 0 0 10px 5px rgba(255, 59, 92, 0.2); }
+          100% { transform: scale(2.5); opacity: 0; box-shadow: 0 0 0 0 rgba(255, 59, 92, 0); }
         }
         .threat-table tbody tr:hover { background: rgba(55,138,221,0.05) !important; }
         .threat-table td { padding: 10px 14px; vertical-align: middle; }

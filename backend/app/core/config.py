@@ -20,6 +20,7 @@ class Settings(BaseSettings):
         "Integrated Threat Assessment Platform — "
         "Autonomous Multi-Vector Intelligence & Incident Response"
     )
+
     DEBUG: bool = True
     HOST: str = "0.0.0.0"
     PORT: int = 8000
@@ -61,6 +62,9 @@ class Settings(BaseSettings):
     CENSYS_API_SECRET: str = ""
     ALIENVAULT_OTX_KEY: str = ""
     NVD_API_KEY: str = ""           # NVD API key (optional, higher rate limits)
+
+    # ── Nmap Active Scanning ─────────────────────
+    NMAP_PATH: str = r"C:\Program Files (x86)\Nmap\nmap.exe"
 
     # ── ML Configuration ─────────────────────────
     LSTM_MODEL_PATH: str = "ml_models/lstm_predictor.pth"

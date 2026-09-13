@@ -101,6 +101,13 @@ export const api = {
   runScan: (data) => request('/scan', { method: 'POST', body: JSON.stringify(data) }),
   getScan: (id) => request(`/scan/${id}`),
 
+  // ── Nmap Active Scanning ───────────────────────────────
+  runNmapScan: (targetId, scanType = 'standard', ports = null) => {
+    let url = `/scan/nmap?target_id=${encodeURIComponent(targetId)}&scan_type=${scanType}`;
+    if (ports) url += `&ports=${encodeURIComponent(ports)}`;
+    return request(url, { method: 'POST' });
+  },
+
   // ── AI/ML Engine ────────────────────────────────────────
   predict: (domain) =>
     request(`/ml/predict?domain=${encodeURIComponent(domain)}`, { method: 'POST' }),

@@ -28,7 +28,7 @@ from app.schemas.schemas import (
     IncidentCreate, IncidentResponse, PlaybookRequest, PlaybookResponse,
     DashboardStats
 )
-from app.services.osint import OSINTAggregator
+from app.services.osint import OSINTAggregator, NmapService
 from app.services.ml.llm_service import LocalLLMService
 from app.services.ml.ml_engine import SeverityScorer
 from app.services.threat_intel.threat_intel_service import KillChainEngine, MITREMapper, ThreatDNAFingerprinter, IOCEnricher
@@ -220,32 +220,181 @@ async def run_osint_scan(
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
 
+    # Check if Nmap active scanning is requested
+    nmap_enabled = getattr(request, 'nmap_enabled', False)
+    nmap_scan_type = getattr(request, 'nmap_scan_type', 'standard')
+
+    scan_detail = "Running Shodan, VirusTotal, CVE/NVD, AlienVault OTX"
+    if nmap_enabled:
+        scan_detail += " + Nmap Active Scan"
+    
+    is_hybrid = nmap_enabled
     await ws_manager.broadcast_system_event(
-        "info", f"OSINT scan started: {target.domain}",
-        detail="Running Shodan, VirusTotal, CVE/NVD, AlienVault OTX"
+        "info", f"{'Hybrid' if is_hybrid else 'OSINT'} scan started: {target.domain}",
+        detail=scan_detail
     )
 
     osint_results = await OSINTAggregator.full_scan(target.domain, target.ip_address)
 
+    # Run Nmap active scan if enabled and merge results
+    if nmap_enabled:
+        try:
+            nmap_target = target.ip_address or target.domain
+            await ws_manager.broadcast_system_event(
+                "info", f"Nmap active scan running: {nmap_target}",
+                detail=f"Scan type: {nmap_scan_type} — this may take 30-120 seconds"
+            )
+            nmap_results = await NmapService.scan(
+                target=nmap_target,
+                scan_type=nmap_scan_type,
+            )
+            osint_results = NmapService.merge_with_osint(nmap_results, osint_results)
+            await ws_manager.broadcast_system_event(
+                "success", f"Nmap scan completed: {nmap_target}",
+                detail=f"{nmap_results.get('duration_seconds', 0):.1f}s | "
+                       f"{len(nmap_results.get('open_ports', []))} ports | "
+                       f"{len(nmap_results.get('vulnerabilities', []))} vulns"
+            )
+        except Exception as e:
+            logger.error(f"Nmap scan failed for {target.domain}: {e}")
+            osint_results["nmap"] = {"status": "error", "error": str(e)}
+
+
+
+    # Determine scan type label based on which active scanners were used
+    if nmap_enabled:
+        scan_type_label = "hybrid_osint_nmap"
+    else:
+        scan_type_label = "full_osint"
+
+    # Dynamically map ports and vulnerabilities based on scan type
+    mapped_ports = osint_results.get("sources", {}).get("shodan", {}).get("ports", [])
+    mapped_vulns = osint_results.get("sources", {}).get("shodan", {}).get("vulns", [])
+
+    if nmap_enabled and osint_results.get("nmap", {}).get("status") == "completed":
+        # Hybrid scan: merge Nmap and OSINT data
+        nmap_data = osint_results["nmap"]
+        mapped_ports = list(set(mapped_ports + [s.get("port") for s in nmap_data.get("services", [])]))
+        for v in nmap_data.get("active_vulnerabilities", []):
+            if v.get("cve_ids"):
+                mapped_vulns.extend(v["cve_ids"])
+            else:
+                mapped_vulns.append(v.get("script", "nmap-vuln"))
+
+
+
+    # De-duplicate
+    mapped_ports = sorted(list(set(mapped_ports)))
+    mapped_vulns = sorted(list(set(mapped_vulns)))
+
     scan = Scan(
         id=str(uuid.uuid4()),
         target_id=target.id,
-        scan_type="full_osint",
+        scan_type=scan_type_label,
         status=DBScanStatus.COMPLETED,
         results=osint_results,
-        open_ports=osint_results.get("sources", {}).get("shodan", {}).get("ports", []),
-        vulnerabilities=osint_results.get("sources", {}).get("shodan", {}).get("vulns", []),
+        open_ports=mapped_ports,
+        vulnerabilities=mapped_vulns,
         reputation_score=osint_results.get("risk_score"),
         completed_at=datetime.utcnow(),
     )
     db.add(scan)
 
+    threats_created = []
+
+    # Fetch existing active threats to prevent duplicates
+    existing_threats = (await db.execute(
+        select(Threat.title).where(
+            Threat.target_id == target.id,
+            Threat.is_archived == False,
+            Threat.is_resolved == False
+        )
+    )).scalars().all()
+    existing_threat_titles = set(existing_threats)
+
+    # 1. Map real vulnerabilities to Threats (Active & High/Critical OSINT)
+    # Map Nmap active vulnerabilities
+    if nmap_enabled and osint_results.get("nmap", {}).get("status") == "completed":
+        for vuln in osint_results["nmap"].get("active_vulnerabilities", []):
+            if vuln.get("severity") in ["HIGH", "CRITICAL"]:
+                title = f"Active Vulnerability: {vuln.get('script')}"
+                if title in existing_threat_titles:
+                    continue
+                sev_val = vuln["severity"].lower()
+                cves = ", ".join(vuln.get("cve_ids", []))
+                threat = Threat(
+                    id=str(uuid.uuid4()),
+                    target_id=target.id,
+                    title=title,
+                    description=f"Confirmed active by Nmap. CVEs: {cves}. {vuln.get('description', '')[:300]}",
+                    severity=SeverityLevel(sev_val),
+                    severity_score=9.8 if sev_val == "critical" else 7.5,
+                    category="Exploitable Vulnerability",
+                    mitre_tactic="Initial Access",
+                    mitre_technique_name="Exploit Public-Facing Application",
+                    ioc_value=cves if cves else vuln.get('script'),
+                    source_latitude=osint_results.get("summary", {}).get("geolocation", {}).get("lat"),
+                    source_longitude=osint_results.get("summary", {}).get("geolocation", {}).get("lon")
+                )
+                
+                # Fetch custom remediation from LLM
+                enrichment = await LocalLLMService.generate_remediation_for_active_threat(
+                    target.domain, threat.title, threat.description
+                )
+                threat.root_cause = enrichment.get("root_cause")
+                threat.attack_vector_detail = enrichment.get("attack_vector_detail")
+                threat.remediation = enrichment.get("remediation", [])
+
+                db.add(threat)
+                existing_threat_titles.add(threat.title)
+                threats_created.append(threat.title)
+
+
+
+    # Map High/Critical OSINT vulnerabilities
+    for svc in osint_results.get("vulnerabilities_by_service", []):
+        for cve in svc.get("cves", []):
+            if cve.get("cvss_score", 0) >= 7.0:
+                title = f"CVE Found: {cve.get('cve_id')} on {svc.get('service', 'Service')}"
+                if title in existing_threat_titles:
+                    continue
+                sev_val = "critical" if cve.get("cvss_score", 0) >= 9.0 else "high"
+                threat = Threat(
+                    id=str(uuid.uuid4()),
+                    target_id=target.id,
+                    title=title,
+                    description=f"{cve.get('description', '')[:300]} (CVSS: {cve.get('cvss_score')})",
+                    severity=SeverityLevel(sev_val),
+                    severity_score=cve.get("cvss_score"),
+                    category="Known Vulnerability",
+                    mitre_tactic="Initial Access",
+                    mitre_technique_name="Exploit Public-Facing Application",
+                    ioc_value=cve.get("cve_id"),
+                )
+                
+                # Fetch custom remediation from LLM for high/critical active threats
+                if sev_val in ["critical", "high"]:
+                    enrichment = await LocalLLMService.generate_remediation_for_active_threat(
+                        target.domain, threat.title, threat.description
+                    )
+                    threat.root_cause = enrichment.get("root_cause")
+                    threat.attack_vector_detail = enrichment.get("attack_vector_detail")
+                    threat.remediation = enrichment.get("remediation", [])
+                    
+                db.add(threat)
+                existing_threat_titles.add(threat.title)
+                threats_created.append(threat.title)
+
+
+
     # 2. Get Threat Predictions (via LLM)
     predictions = await LocalLLMService.generate_prediction(target.domain, osint_results)
 
-    threats_created = []
     for pred in predictions[:5]:
         if pred["probability"] > 0.5:
+            title = f"Predicted: {pred.get('predicted_attack_type', 'Unknown Threat')}"
+            if title in existing_threat_titles:
+                continue
             mitre_mapping = MITREMapper.map_threat(
                 pred.get("predicted_attack_type", ""),
                 pred.get("predicted_attack_type", ""),
@@ -264,7 +413,7 @@ async def run_osint_scan(
             threat = Threat(
                 id=str(uuid.uuid4()),
                 target_id=target.id,
-                title=f"Predicted: {pred.get('predicted_attack_type', 'Unknown Threat')}",
+                title=title,
                 description=(
                     f"AI prediction — {pred.get('probability', 0) * 100:.1f}% probability within "
                     f"{pred.get('time_window_hours', 72)}h. "
@@ -292,6 +441,7 @@ async def run_osint_scan(
                 remediation=pred.get("remediation"),
             )
             db.add(threat)
+            existing_threat_titles.add(threat.title)
             threats_created.append(threat.title)
 
             # Broadcast high-severity threats immediately
@@ -335,6 +485,77 @@ async def run_osint_scan(
         "vulnerabilities_by_service": vuln_by_service,
         "threat_surface": osint_results.get("threat_surface", []),
         "osint_fingerprint": osint_results.get("osint_fingerprint", {}),
+        "nmap": osint_results.get("nmap"),
+    }
+
+
+@router.post("/scan/nmap", tags=["Active Scanning"])
+async def run_nmap_scan(
+    target_id: str,
+    scan_type: str = Query("standard", description="quick | standard | deep"),
+    ports: Optional[str] = Query(None, description="Custom port range, e.g. '22,80,443' or '1-1024'"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_admin_role),
+):
+    """
+    Run a standalone Nmap active scan against a target.
+    Requires admin privileges. Returns raw Nmap results.
+    Scan types:
+      - quick: Top 100 ports + service detection (~10-20s)
+      - standard: Top 1000 ports + service + OS detection (~30-60s)
+      - deep: All ports + NSE vulnerability scripts (~60-180s)
+    """
+    result = await db.execute(select(Target).where(Target.id == target_id))
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+    nmap_target = target.ip_address or target.domain
+
+    await ws_manager.broadcast_system_event(
+        "info", f"Nmap {scan_type} scan initiated: {nmap_target}",
+        detail=f"Admin: {current_user.get('sub')} | Ports: {ports or 'auto'}"
+    )
+
+    nmap_results = await NmapService.scan(
+        target=nmap_target,
+        scan_type=scan_type,
+        ports=ports,
+    )
+
+    if nmap_results.get("status") == "error":
+        await ws_manager.broadcast_system_event(
+            "error", f"Nmap scan failed: {nmap_target}",
+            detail=nmap_results.get("error", "Unknown error")
+        )
+        raise HTTPException(status_code=500, detail=nmap_results.get("error", "Nmap scan failed"))
+
+    # Save as a scan record
+    scan = Scan(
+        id=str(uuid.uuid4()),
+        target_id=target.id,
+        scan_type=f"nmap_{scan_type}",
+        status=DBScanStatus.COMPLETED,
+        results=nmap_results,
+        open_ports=nmap_results.get("open_ports", []),
+        vulnerabilities=[v.get("description", "")[:200] for v in nmap_results.get("vulnerabilities", [])],
+        completed_at=datetime.utcnow(),
+    )
+    db.add(scan)
+    await db.commit()
+
+    await ws_manager.broadcast_system_event(
+        "success", f"Nmap scan completed: {nmap_target}",
+        detail=f"{nmap_results.get('duration_seconds', 0)}s | "
+               f"{len(nmap_results.get('open_ports', []))} ports | "
+               f"{len(nmap_results.get('services', []))} services | "
+               f"{len(nmap_results.get('vulnerabilities', []))} vulns"
+    )
+
+    return {
+        "scan_id": scan.id,
+        "target": target.domain,
+        **nmap_results,
     }
 
 
@@ -833,14 +1054,15 @@ async def get_dashboard_stats(
     targets_count = (await db.execute(select(func.count(Target.id)).where(Target.is_archived == False))).scalar() or 0
     # To fix "phantom threats", active_threats should only count real scan threats, 
     # not the global feed which is populated into the incidents table.
+    # Also exclude AI predictions (title starts with 'Predicted:') from active threat counts.
     threats_count = (await db.execute(
         select(func.count(Threat.id)).where(
-            and_(Threat.is_resolved == False, Threat.is_archived == False)
+            and_(Threat.is_resolved == False, Threat.is_archived == False, ~Threat.title.like('Predicted:%'))
         )
     )).scalar() or 0
     critical_count = (await db.execute(
         select(func.count(Threat.id)).where(
-            and_(Threat.severity == SeverityLevel.CRITICAL, Threat.is_resolved == False, Threat.is_archived == False)
+            and_(Threat.severity == SeverityLevel.CRITICAL, Threat.is_resolved == False, Threat.is_archived == False, ~Threat.title.like('Predicted:%'))
         )
     )).scalar() or 0
     incidents_count = (await db.execute(
@@ -856,11 +1078,14 @@ async def get_dashboard_stats(
     )).scalar() or 0
 
     # Fetch all active threats for comprehensive aggregations (limit 1000 to prevent memory issues)
+    # Exclude AI predictions from dashboard aggregations — they have their own tab
     all_threats_result = await db.execute(
-        select(Threat).options(selectinload(Threat.target)).where(Threat.is_archived == False).order_by(Threat.detected_at.desc()).limit(1000)
+        select(Threat).options(selectinload(Threat.target)).where(
+            and_(Threat.is_archived == False, ~Threat.title.like('Predicted:%'))
+        ).order_by(Threat.detected_at.desc()).limit(1000)
     )
     all_active_threats = all_threats_result.scalars().all()
-    recent_threats = all_active_threats[:10]
+    recent_threats = all_active_threats[:50]
 
     recent_incidents_result = await db.execute(
         select(Incident).where(Incident.is_archived == False).order_by(Incident.detected_at.desc()).limit(10)
@@ -870,7 +1095,7 @@ async def get_dashboard_stats(
     severity_counts = {}
     for sev in SeverityLevel:
         count = (await db.execute(
-            select(func.count(Threat.id)).where(and_(Threat.severity == sev, Threat.is_archived == False))
+            select(func.count(Threat.id)).where(and_(Threat.severity == sev, Threat.is_archived == False, ~Threat.title.like('Predicted:%')))
         )).scalar() or 0
         severity_counts[sev.value] = count
 

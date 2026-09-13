@@ -2,16 +2,20 @@ import { useState } from 'react';
 import { FileText, Download, Calendar, BarChart2, Shield, AlertTriangle, TrendingUp, Clock, Activity } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from './ToastNotification';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import AnimatedButton from './ui/AnimatedButton';
+import { motion, AnimatePresence } from 'framer-motion';
 
 function MetricCard({ label, value, color, icon: Icon }) {
   return (
-    <div className="stat-card" style={{ textAlign: 'center' }}>
+    <HoverCard className="stat-card" style={{ textAlign: 'center' }} tiltFactor={2}>
       <div className="stat-icon" style={{ background: `${color}22`, color, margin: '0 auto 12px' }}>
         <Icon size={18} />
       </div>
       <div className="stat-value" style={{ color }}>{value}</div>
       <div className="stat-label">{label}</div>
-    </div>
+    </HoverCard>
   );
 }
 
@@ -166,7 +170,7 @@ function SchedulerReport({ scheduler }) {
 
   if (history.length === 0) {
     return (
-      <div className="panel" style={{ padding: 60, textAlign: 'center' }}>
+      <HoverCard className="panel" style={{ padding: 60, textAlign: 'center' }}>
         <Clock size={52} color="var(--text-muted)" style={{ marginBottom: 20 }} />
         <div style={{ color: 'var(--text-muted)', fontSize: 15, marginBottom: 8 }}>
           No scheduler data available
@@ -175,14 +179,14 @@ function SchedulerReport({ scheduler }) {
           Start the Scan Scheduler from the header to begin automated scanning.
           Reports will be generated from the collected scan data.
         </div>
-      </div>
+      </HoverCard>
     );
   }
 
   return (
     <div className="stagger">
       {/* Report Header */}
-      <div className="panel glass" style={{ marginBottom: 20, borderColor: 'rgba(139,92,246,0.3)' }}>
+      <HoverCard className="panel glass" style={{ marginBottom: 20, borderColor: 'rgba(139,92,246,0.3)' }} tiltFactor={1}>
         <div className="panel-body" style={{ padding: 28 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
             <div>
@@ -206,7 +210,7 @@ function SchedulerReport({ scheduler }) {
             </div>
           </div>
         </div>
-      </div>
+      </HoverCard>
 
       {/* Metrics */}
       <div className="stats-grid stagger" style={{ marginBottom: 20 }}>
@@ -219,18 +223,18 @@ function SchedulerReport({ scheduler }) {
       </div>
 
       {/* Risk Score Line Graph */}
-      <div className="panel" style={{ marginBottom: 20 }}>
+      <HoverCard className="panel" style={{ marginBottom: 20 }}>
         <div className="panel-header">
           <div className="panel-title"><TrendingUp size={16} /> Risk Score Over Time</div>
         </div>
         <div className="panel-body">
           <SchedulerLineGraph scanHistory={history} />
         </div>
-      </div>
+      </HoverCard>
 
       {/* Risk Range */}
       <div className="content-grid" style={{ marginBottom: 20 }}>
-        <div className="panel">
+        <HoverCard className="panel">
           <div className="panel-header"><div className="panel-title"><BarChart2 size={16} /> Risk Score Range</div></div>
           <div className="panel-body">
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -259,9 +263,9 @@ function SchedulerReport({ scheduler }) {
               }} />
             </div>
           </div>
-        </div>
+        </HoverCard>
 
-        <div className="panel">
+        <HoverCard className="panel">
           <div className="panel-header"><div className="panel-title"><Shield size={16} /> Scheduler Summary</div></div>
           <div className="panel-body">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -278,18 +282,18 @@ function SchedulerReport({ scheduler }) {
               ))}
             </div>
           </div>
-        </div>
+        </HoverCard>
       </div>
 
       {/* Scan Log Table */}
-      <div className="panel">
+      <HoverCard className="panel">
         <div className="panel-header"><div className="panel-title"><Activity size={16} /> Full Scan Log</div></div>
         <div className="panel-body no-pad">
           <table className="threat-table">
             <thead><tr><th>#</th><th>Timestamp</th><th>Status</th><th>Risk Score</th><th>Threats Created</th></tr></thead>
-            <tbody>
+            <StaggeredList component="tbody">
               {history.map((entry, i) => (
-                <tr key={i}>
+                <StaggeredItem key={i} component="tr">
                   <td style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, color: '#4B5563' }}>{history.length - i}</td>
                   <td style={{ fontFamily: "'JetBrains Mono'", fontSize: 11 }}>
                     {new Date(entry.timestamp).toLocaleString()}
@@ -307,12 +311,12 @@ function SchedulerReport({ scheduler }) {
                   <td style={{ fontFamily: "'JetBrains Mono'", fontSize: 12 }}>
                     {entry.error ? '—' : `+${entry.threatsCreated}`}
                   </td>
-                </tr>
+                </StaggeredItem>
               ))}
-            </tbody>
+            </StaggeredList>
           </table>
         </div>
-      </div>
+      </HoverCard>
     </div>
   );
 }
@@ -355,10 +359,10 @@ export default function ReportsView({ scheduler }) {
   return (
     <div className="fade-in">
       {/* Tab Switcher */}
-      <div className="panel" style={{ marginBottom: 20 }}>
+      <HoverCard className="panel" style={{ marginBottom: 20 }}>
         <div className="panel-body" style={{ padding: '0' }}>
           <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-            <button
+            <AnimatedButton
               onClick={() => setActiveTab('regular')}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -369,8 +373,8 @@ export default function ReportsView({ scheduler }) {
               }}
             >
               <FileText size={14} /> Executive Report
-            </button>
-            <button
+            </AnimatedButton>
+            <AnimatedButton
               onClick={() => setActiveTab('scheduler')}
               style={{
                 background: 'none', border: 'none', cursor: 'pointer',
@@ -390,16 +394,18 @@ export default function ReportsView({ scheduler }) {
                   {scheduler.scanHistory.length}
                 </span>
               )}
-            </button>
+            </AnimatedButton>
           </div>
         </div>
-      </div>
+      </HoverCard>
+
+      <AnimatePresence mode="wait">
 
       {/* Regular Report Tab */}
       {activeTab === 'regular' && (
-        <>
+        <motion.div key="regular" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
           {/* Config Panel */}
-          <div className="panel" style={{ marginBottom: 20 }}>
+          <HoverCard className="panel" style={{ marginBottom: 20 }}>
             <div className="panel-header">
               <div className="panel-title"><FileText size={16} /> Executive Security Report Generator</div>
             </div>
@@ -421,21 +427,21 @@ export default function ReportsView({ scheduler }) {
                     <option value={90}>Last 90 Days</option>
                   </select>
                 </div>
-                <button id="report-generate" className="header-btn primary" onClick={handleGenerate} disabled={loading}>
+                <AnimatedButton id="report-generate" className="header-btn primary" onClick={handleGenerate} disabled={loading}>
                   <BarChart2 size={14} />
                   {loading ? 'Generating...' : 'Generate Report'}
-                </button>
+                </AnimatedButton>
                 {report && (
-                  <button className="header-btn" onClick={handleDownload}>
+                  <AnimatedButton className="header-btn" onClick={handleDownload}>
                     <Download size={14} /> Download TXT
-                  </button>
+                  </AnimatedButton>
                 )}
               </div>
             </div>
-          </div>
+          </HoverCard>
 
           {!report && !loading && (
-            <div className="panel" style={{ padding: 60, textAlign: 'center' }}>
+            <HoverCard className="panel" style={{ padding: 60, textAlign: 'center' }}>
               <FileText size={52} color="var(--text-muted)" style={{ marginBottom: 20 }} />
               <div style={{ color: 'var(--text-muted)', fontSize: 15, marginBottom: 8 }}>
                 Select a period and generate your executive security report
@@ -443,7 +449,7 @@ export default function ReportsView({ scheduler }) {
               <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>
                 Reports include threat summary, severity breakdown, top IOCs, and recommendations
               </div>
-            </div>
+            </HoverCard>
           )}
 
           {loading && (
@@ -456,7 +462,7 @@ export default function ReportsView({ scheduler }) {
           {report && (
             <div className="stagger">
               {/* Report Header */}
-              <div className="panel glass" style={{ marginBottom: 20, borderColor: 'rgba(0,163,255,0.3)' }}>
+              <HoverCard className="panel glass" style={{ marginBottom: 20, borderColor: 'rgba(0,163,255,0.3)' }} tiltFactor={1}>
                 <div className="panel-body" style={{ padding: 28 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
                     <div>
@@ -465,20 +471,20 @@ export default function ReportsView({ scheduler }) {
                         <h2 style={{ fontSize: 20, fontWeight: 800 }}>{report.report_title}</h2>
                       </div>
                       <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        Generated: {new Date(report.generated_at).toLocaleString()} · By: {report.generated_by}
+                        Generated: {new Date(report.generated_at + 'Z').toLocaleString()} · By: {report.generated_by}
                       </div>
                       <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        Period: {new Date(report.period_start).toLocaleDateString()} – {new Date(report.period_end).toLocaleDateString()}
+                        Period: {new Date(report.period_start + 'Z').toLocaleDateString()} – {new Date(report.period_end + 'Z').toLocaleDateString()}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="header-btn" onClick={handleDownload}>
+                      <AnimatedButton className="header-btn" onClick={handleDownload}>
                         <Download size={14} /> Export
-                      </button>
+                      </AnimatedButton>
                     </div>
                   </div>
                 </div>
-              </div>
+              </HoverCard>
 
               {/* Metrics */}
               <div className="stats-grid stagger" style={{ marginBottom: 20 }}>
@@ -496,7 +502,7 @@ export default function ReportsView({ scheduler }) {
 
               {/* Severity Breakdown */}
               <div className="content-grid">
-                <div className="panel">
+                <HoverCard className="panel">
                   <div className="panel-header"><div className="panel-title"><BarChart2 size={16} /> Threats by Severity</div></div>
                   <div className="panel-body">
                     {Object.entries(sev).map(([s, count]) => {
@@ -516,9 +522,9 @@ export default function ReportsView({ scheduler }) {
                       );
                     })}
                   </div>
-                </div>
+                </HoverCard>
 
-                <div className="panel">
+                <HoverCard className="panel">
                   <div className="panel-header"><div className="panel-title"><Shield size={16} /> Recommendations</div></div>
                   <div className="panel-body">
                     <ol style={{ padding: '0 0 0 18px', margin: 0 }}>
@@ -529,42 +535,45 @@ export default function ReportsView({ scheduler }) {
                       ))}
                     </ol>
                   </div>
-                </div>
+                </HoverCard>
               </div>
 
               {/* Top Threats */}
               {report.top_threats?.length > 0 && (
-                <div className="panel" style={{ marginTop: 20 }}>
+                <HoverCard className="panel" style={{ marginTop: 20 }}>
                   <div className="panel-header"><div className="panel-title"><AlertTriangle size={16} /> Top Threats in Period</div></div>
                   <div className="panel-body no-pad">
                     <table className="threat-table">
                       <thead><tr><th>Threat</th><th>Severity</th><th>Score</th><th>MITRE Tactic</th><th>Detected</th></tr></thead>
-                      <tbody>
+                      <StaggeredList component="tbody">
                         {report.top_threats.map((t, i) => (
-                          <tr key={i}>
+                          <StaggeredItem key={i} component="tr">
                             <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{t.title}</td>
                             <td><span className={`severity-badge ${t.severity}`}>{t.severity}</span></td>
                             <td style={{ fontFamily: "'JetBrains Mono'", fontSize: 12 }}>{t.score?.toFixed(1) || '—'}</td>
                             <td style={{ color: 'var(--accent-purple)' }}>{t.mitre_tactic || '—'}</td>
                             <td style={{ fontFamily: "'JetBrains Mono'", fontSize: 11 }}>
-                              {t.detected_at ? new Date(t.detected_at).toLocaleDateString() : '—'}
+                              {t.detected_at ? new Date(t.detected_at + 'Z').toLocaleDateString() : '—'}
                             </td>
-                          </tr>
+                          </StaggeredItem>
                         ))}
-                      </tbody>
+                      </StaggeredList>
                     </table>
                   </div>
-                </div>
+                </HoverCard>
               )}
             </div>
           )}
-        </>
+        </motion.div>
       )}
 
       {/* Scheduler Report Tab */}
       {activeTab === 'scheduler' && (
-        <SchedulerReport scheduler={scheduler} />
+        <motion.div key="scheduler" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+          <SchedulerReport scheduler={scheduler} />
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 }

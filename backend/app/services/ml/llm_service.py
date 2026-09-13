@@ -112,6 +112,61 @@ class LocalLLMService:
             return await LSTMPredictor.predict_threats(domain, osint_data)
 
     @staticmethod
+    async def generate_remediation_for_active_threat(domain: str, threat_title: str, threat_desc: str) -> Dict[str, Any]:
+        """
+        Prompt the local Llama 3 model to generate root cause and remediation for a specific active threat (e.g. from Nmap).
+        Falls back to Statistical ML Engine if LLM is unreachable.
+        """
+        import re
+
+        if not await LocalLLMService.is_ollama_available():
+            from app.services.ml.ml_engine import LSTMPredictor
+            # Fallback to ML Engine's knowledge base
+            return LSTMPredictor._get_root_cause_info(threat_title, threat_desc, domain, {})
+
+        prompt = f"""
+        You are an elite Incident Responder. Provide a precise, highly technical root cause and remediation plan for the following confirmed vulnerability on {domain}:
+        Vulnerability: {threat_title}
+        Details: {threat_desc}
+
+        Output MUST be in strict JSON object format. DO NOT use markdown code blocks (```json) in your response, just the raw JSON:
+        {{
+          "root_cause": "string — Hyper-specific technical flaw causing this issue.",
+          "attack_vector_detail": "string — Step-by-step kill chain an attacker would use to exploit this.",
+          "remediation": [
+            {{"step": 1, "action": "string", "priority": "immediate", "detail": "string with exact commands/snippets"}},
+            {{"step": 2, "action": "string", "priority": "short-term", "detail": "string"}},
+            {{"step": 3, "action": "string", "priority": "long-term", "detail": "string"}}
+          ]
+        }}
+        """
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(OLLAMA_API_URL, json={
+                    "model": MODEL_NAME,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json"
+                }, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        response_text = data.get("response", "{}")
+                        cleaned_json = re.sub(r"```json\s*|\s*```", "", response_text.strip())
+                        
+                        try:
+                            result = json.loads(cleaned_json)
+                            return result
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse LLM JSON for active threat. Falling back. Cleaned text: {cleaned_json[:200]}")
+        except Exception as e:
+            logger.error(f"Error calling LLM for active threat enrichment: {e}. Falling back to ML Engine.")
+
+        # Fallback if LLM failed
+        from app.services.ml.ml_engine import LSTMPredictor
+        return LSTMPredictor._get_root_cause_info(threat_title, threat_desc, domain, {})
+
+    @staticmethod
     async def detect_anomalies() -> Dict[str, Any]:
         """
         Prompt the local Llama 3 model to analyze recent network traffic logs for anomalies.

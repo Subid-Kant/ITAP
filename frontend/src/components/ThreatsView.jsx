@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Shield, Target, Zap, Wrench, BookOpen, Clock, ShieldOff } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
@@ -46,7 +46,13 @@ function RemediationStep({ step }) {
 
 function BlockIPButton({ threat }) {
   const [status, setStatus] = useState('idle'); // idle | loading | done | error
-  const ip = threat.source_country ? `10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}` : null;
+  const [ip, setIp] = useState(null);
+  
+  useEffect(() => {
+    if (threat.source_country) {
+      setIp(`10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`);
+    }
+  }, [threat.source_country]);
 
   const handleBlock = async (e) => {
     e.stopPropagation();
@@ -101,7 +107,7 @@ function ThreatCard({ t, isAdmin }) {
     critical: '#ef4444', high: '#f97316', medium: '#f59e0b', low: '#22c55e', info: '#3b82f6',
   }[t.severity] || '#6b7280';
 
-  const hasEnrichment = t.root_cause || t.remediation?.length;
+  const hasEnrichment = t.root_cause || t.remediation?.length || t.description;
 
   const tabs = [
     { id: 'root_cause', label: 'Root Cause', icon: <BookOpen size={12} /> },
@@ -182,7 +188,7 @@ function ThreatCard({ t, isAdmin }) {
             fontFamily: "'JetBrains Mono', monospace", fontSize: 11,
             color: 'rgba(240,239,233,0.4)', whiteSpace: 'nowrap',
           }}>
-            {t.detected_at ? new Date(t.detected_at).toLocaleString() : '—'}
+            {t.detected_at ? new Date(t.detected_at + 'Z').toLocaleString() : '—'}
           </span>
           {isAdmin && t.source_country && <BlockIPButton threat={t} />}
           {hasEnrichment && (
@@ -257,8 +263,23 @@ function ThreatCard({ t, isAdmin }) {
                     {t.root_cause}
                   </p>
                 </div>
+              ) : t.description ? (
+                <div style={{
+                  padding: 14, borderRadius: 8,
+                  background: 'rgba(59,130,246,0.07)', border: '1px solid rgba(59,130,246,0.18)',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <AlertTriangle size={13} color="#3b82f6" />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      Description
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: 13, color: 'rgba(240,239,233,0.85)', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
+                    {t.description}
+                  </p>
+                </div>
               ) : (
-                <p style={{ color: 'rgba(240,239,233,0.4)', fontSize: 13 }}>No root cause data available.</p>
+                <p style={{ color: 'rgba(240,239,233,0.4)', fontSize: 13 }}>No root cause or description available.</p>
               )}
               {t.ioc_value && (
                 <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -349,7 +370,8 @@ function ThreatCard({ t, isAdmin }) {
 }
 
 export default function ThreatsView({ stats }) {
-  const threats = stats?.recent_threats || [];
+  // Filter out AI predictions — those are shown in the dedicated AI Predictions tab
+  const threats = (stats?.recent_threats || []).filter(t => !t.title?.startsWith('Predicted:'));
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 

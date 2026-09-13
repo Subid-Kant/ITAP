@@ -17,10 +17,14 @@ from pathlib import Path
 try:
     from app.services.ml.native_inference import NativeLSTM, NativeAutoencoder
     WEIGHTS_DIR = Path(__file__).parent / "weights"
-    lstm_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_v3.h5"))
-    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_v3.h5"))
+    
+    # 3-Model Distributed Architecture
+    lstm_killchain_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_killchain_v3.h5"))
+    lstm_waf_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_waf_payloads_v3.h5"))
+    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_network_v3.h5"))
+    
     MODELS_LOADED = True
-    print("[INFO] Successfully loaded ITAP Native ML Models")
+    print("[INFO] Successfully loaded ITAP Native ML Models (Distributed Architecture)")
 except Exception as e:
     MODELS_LOADED = False
     print(f"[WARNING] Could not load ML models, using simulation fallback: {e}")
@@ -580,7 +584,7 @@ class LSTMPredictor:
                 if MODELS_LOADED:
                     # Pass features into actual LSTM model
                     # Dynamically get the expected input shape from the loaded model
-                    expected_dim = lstm_engine.lstm1[0].shape[0] if hasattr(lstm_engine, 'lstm1') else 20
+                    expected_dim = lstm_killchain_engine.lstm1[0].shape[0] if hasattr(lstm_killchain_engine, 'lstm1') else 20
                     
                     if "feature_vector" in osint_data:
                         feat_vec = osint_data["feature_vector"].copy()
@@ -596,10 +600,17 @@ class LSTMPredictor:
 
                     
                     # Output is now a 10-class softmax array. We take the max probability as the exploit threat.
-                    raw_prediction = lstm_engine.predict(x_input)[0]
+                    # Route to correct model: NLP text attacks go to WAF LSTM, structural go to KillChain LSTM
+                    if "Injection" in cve_desc or "Cross-Site" in cve_desc:
+                        raw_prediction = lstm_waf_engine.predict(x_input)[0]
+                    else:
+                        raw_prediction = lstm_killchain_engine.predict(x_input)[0]
+                        
                     probability = float(np.max(raw_prediction))
 
                 attack_type = LSTMPredictor._classify_attack(cve_desc)
+                if attack_type == "Exploitation Attempt" and cve_id:
+                    attack_type = f"Exploitation Attempt ({cve_id})"
                 rca = LSTMPredictor._get_root_cause_info(attack_type, cve_desc, target_domain=domain, osint_data=osint_data)
 
                 # Enrich affected_components with Shodan service data if available

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import './index.css';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
@@ -155,14 +156,42 @@ function AppContent() {
     };
   }, []);
 
-  // Global Cmd/Ctrl+K listener for Command Palette
+  // Global keyboard listener for Command Palette and Navigation Hotkeys
   useEffect(() => {
+    const hotkeyMap = {
+      '1': 'dashboard',
+      '2': 'threats',
+      '3': 'incidents',
+      '4': 'scanner',
+      '5': 'predictions',
+      '6': 'anomalies',
+      '7': 'mitre',
+      '8': 'killchain',
+      '9': 'geomap',
+      '0': 'ioc'
+    };
+
     const handler = (e) => {
+      // Command Palette (Ctrl/Cmd + K)
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setPaletteOpen(p => !p);
+        return;
+      }
+
+      // Tab Hotkeys (1-0)
+      if (hotkeyMap[e.key]) {
+        // Prevent triggering while typing in inputs
+        const isInput = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable;
+        
+        // Trigger if Alt is held, OR if no modifier keys are held and not typing
+        if (e.altKey || (!isInput && !e.ctrlKey && !e.metaKey)) {
+          e.preventDefault();
+          setActiveView(hotkeyMap[e.key]);
+        }
       }
     };
+    
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
@@ -216,28 +245,55 @@ function AppContent() {
   };
 
   const renderView = () => {
+    const pageVariants = {
+      initial: { opacity: 0, y: 20 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0, y: -20 }
+    };
+    const pageTransition = {
+      type: 'tween',
+      ease: 'anticipate',
+      duration: 0.3
+    };
+
+    let ViewComponent;
     switch (activeView) {
-      case 'dashboard':   return <DashboardView stats={stats} isLive={isLive} />;
-      case 'threats':     return <ThreatsView stats={stats} />;
-      case 'incidents':   return <IncidentsView stats={stats} />;
-      case 'scanner':     return <ScannerView
+      case 'dashboard':   ViewComponent = <DashboardView stats={stats} isLive={isLive} />; break;
+      case 'threats':     ViewComponent = <ThreatsView stats={stats} />; break;
+      case 'incidents':   ViewComponent = <IncidentsView stats={stats} />; break;
+      case 'scanner':     ViewComponent = <ScannerView
                             onScanComplete={handleScanComplete}
                             scannerState={scannerState}
                             setScannerState={setScannerState}
-                          />;
-
-      case 'predictions': return <PredictionsView />;
-      case 'anomalies':   return <AnomaliesView />;
-      case 'mitre':       return <MitreView stats={stats} />;
-      case 'killchain':   return <KillChainView stats={stats} />;
-      case 'geomap':      return <GeoMapView stats={stats} />;
-      case 'posture':     return <SecurityPostureView stats={stats} scheduler={scheduler} />;
-      case 'playbooks':   return <PlaybookView />;
-      case 'ioc':         return <IOCWorkbench />;
-      case 'reports':     return <ReportsView scheduler={scheduler} />;
-      case 'history':     return <HistoryView />;
-      default:            return <SecurityPostureView stats={stats} scheduler={scheduler} />;
+                          />; break;
+      case 'predictions': ViewComponent = <PredictionsView />; break;
+      case 'anomalies':   ViewComponent = <AnomaliesView />; break;
+      case 'mitre':       ViewComponent = <MitreView stats={stats} />; break;
+      case 'killchain':   ViewComponent = <KillChainView stats={stats} />; break;
+      case 'geomap':      ViewComponent = <GeoMapView stats={stats} />; break;
+      case 'posture':     ViewComponent = <SecurityPostureView stats={stats} scheduler={scheduler} />; break;
+      case 'playbooks':   ViewComponent = <PlaybookView />; break;
+      case 'ioc':         ViewComponent = <IOCWorkbench />; break;
+      case 'reports':     ViewComponent = <ReportsView scheduler={scheduler} />; break;
+      case 'history':     ViewComponent = <HistoryView />; break;
+      default:            ViewComponent = <SecurityPostureView stats={stats} scheduler={scheduler} />; break;
     }
+
+    return (
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activeView}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          variants={pageVariants}
+          transition={pageTransition}
+          style={{ width: '100%', height: '100%' }}
+        >
+          {ViewComponent}
+        </motion.div>
+      </AnimatePresence>
+    );
   };
 
   return (

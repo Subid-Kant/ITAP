@@ -1,5 +1,8 @@
 import { useState, useMemo } from 'react';
 import { Grid3X3, ExternalLink, ShieldAlert, ShieldOff, Target } from 'lucide-react';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const MITRE_TACTICS = [
   { name: 'Reconnaissance', id: 'TA0043', color: '#378ADD', icon: '🔍' },
@@ -68,7 +71,7 @@ export default function MitreView({ stats }) {
     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
       {/* ── ATT&CK Matrix Heatmap ── */}
-      <div className="panel">
+      <HoverCard className="panel" tiltFactor={2}>
         <div className="panel-header">
           <div className="panel-title"><Grid3X3 size={16} /> MITRE ATT&CK Matrix — Live Detection Coverage</div>
           <div style={{ fontSize: 12, color: '#6B7280' }}>
@@ -76,13 +79,13 @@ export default function MitreView({ stats }) {
           </div>
         </div>
         <div style={{ padding: '16px' }}>
-          <div className="mitre-matrix">
+          <StaggeredList className="mitre-matrix" delay={0.03}>
             {MITRE_TACTICS.map(t => {
               const count = tacticCounts[t.name] || 0;
               const isActive = count > 0;
               const isSelected = selectedTactic === t.name;
               return (
-                <div
+                <StaggeredItem
                   key={t.id}
                   onClick={() => setSelectedTactic(isSelected ? null : t.name)}
                   className={`mitre-tactic ${isActive ? 'active' : ''}`}
@@ -94,91 +97,103 @@ export default function MitreView({ stats }) {
                     transform: isSelected ? 'scale(1.06)' : undefined,
                     transition: 'all 0.2s ease',
                   }}
+                  whileHover={isActive ? { scale: 1.05, y: -2 } : {}}
                 >
                   <div className="mitre-tactic-count" style={{ color: isActive ? t.color : undefined }}>
                     {count}
                   </div>
                   <div className="mitre-tactic-name">{t.name}</div>
                   <div style={{ fontSize: 9, color: '#4B5563', marginTop: 2 }}>{t.id}</div>
-                </div>
+                </StaggeredItem>
               );
             })}
-          </div>
+          </StaggeredList>
           {activeTactics.length > 0 && (
             <div style={{ fontSize: 11, color: '#6B7280', marginTop: 12, textAlign: 'center' }}>
               Click an active tactic to see technique details
             </div>
           )}
         </div>
-      </div>
+      </HoverCard>
 
       {/* ── Selected Tactic Detail ── */}
-      {selectedTactic && selectedTacticData && (
-        <div className="panel" style={{ borderColor: 'rgba(55,138,221,0.3)' }}>
-          <div className="panel-header">
-            <div className="panel-title">
-              <ShieldAlert size={16} />
-              {selectedTactic} — Active Techniques
+      <AnimatePresence>
+        {selectedTactic && selectedTacticData && (
+          <HoverCard 
+            className="panel" 
+            style={{ borderColor: 'rgba(55,138,221,0.3)' }}
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+          >
+            <div className="panel-header">
+              <div className="panel-title">
+                <ShieldAlert size={16} />
+                {selectedTactic} — Active Techniques
+              </div>
+              <button onClick={() => setSelectedTactic(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', fontSize: 18 }}>×</button>
             </div>
-            <button onClick={() => setSelectedTactic(null)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', fontSize: 18 }}>×</button>
-          </div>
-          <div className="panel-body no-pad">
-            <table className="threat-table">
-              <thead>
-                <tr>
-                  <th>Technique ID</th>
-                  <th>Technique Name</th>
-                  <th>Target Domain</th>
-                  <th>Severity</th>
-                  <th>Reference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedTacticData.map((c, i) => {
-                  const sc = severityColors[c.severity?.toLowerCase()] || '#6B7280';
-                  return (
-                    <tr key={i}>
-                      <td>
-                        <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#378ADD' }}>
-                          {c.technique_id || '—'}
-                        </code>
-                      </td>
-                      <td style={{ color: '#F0EFE9', fontWeight: 500 }}>{c.technique_name || '—'}</td>
-                      <td>
-                        {c.target_domain
-                          ? <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                              <Target size={10} color="#6B7280" />
-                              <span style={{ fontSize: 12, color: '#9CA3AF' }}>{c.target_domain}</span>
-                            </span>
-                          : <span style={{ color: '#4B5563' }}>—</span>
-                        }
-                      </td>
-                      <td>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: sc, background: `${sc}18`, border: `1px solid ${sc}40`, padding: '2px 7px', borderRadius: 4 }}>
-                          {c.severity?.toUpperCase()}
-                        </span>
-                      </td>
-                      <td>
-                        {c.mitre_url && c.technique_id && (
-                          <a href={c.mitre_url} target="_blank" rel="noopener noreferrer"
-                            style={{ color: '#378ADD', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                            <ExternalLink size={11} /> ATT&CK
-                          </a>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+            <div className="panel-body no-pad">
+              <table className="threat-table">
+                <thead>
+                  <tr>
+                    <th>Technique ID</th>
+                    <th>Technique Name</th>
+                    <th>Target Domain</th>
+                    <th>Severity</th>
+                    <th>Reference</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedTacticData.map((c, i) => {
+                    const sc = severityColors[c.severity?.toLowerCase()] || '#6B7280';
+                    return (
+                      <motion.tr 
+                        key={i}
+                        initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
+                      >
+                        <td>
+                          <code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#378ADD' }}>
+                            {c.technique_id || '—'}
+                          </code>
+                        </td>
+                        <td style={{ color: '#F0EFE9', fontWeight: 500 }}>{c.technique_name || '—'}</td>
+                        <td>
+                          {c.target_domain
+                            ? <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <Target size={10} color="#6B7280" />
+                                <span style={{ fontSize: 12, color: '#9CA3AF' }}>{c.target_domain}</span>
+                              </span>
+                            : <span style={{ color: '#4B5563' }}>—</span>
+                          }
+                        </td>
+                        <td>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: sc, background: `${sc}18`, border: `1px solid ${sc}40`, padding: '2px 7px', borderRadius: 4 }}>
+                            {c.severity?.toUpperCase()}
+                          </span>
+                        </td>
+                        <td>
+                          {c.mitre_url && c.technique_id && (
+                            <a href={c.mitre_url} target="_blank" rel="noopener noreferrer"
+                              style={{ color: '#378ADD', display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+                              <ExternalLink size={11} /> ATT&CK
+                            </a>
+                          )}
+                        </td>
+                      </motion.tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </HoverCard>
+        )}
+      </AnimatePresence>
 
       {/* ── All Detected Techniques (when none selected) ── */}
       {!selectedTactic && coverage.length > 0 && (
-        <div className="panel">
+        <HoverCard className="panel">
           <div className="panel-header">
             <div className="panel-title">Detected Techniques ({coverage.length} total)</div>
           </div>
@@ -191,7 +206,7 @@ export default function MitreView({ stats }) {
                 {coverage.map((c, i) => {
                   const sc = severityColors[c.severity?.toLowerCase()] || '#6B7280';
                   return (
-                    <tr key={i} onClick={() => setSelectedTactic(c.tactic)} style={{ cursor: 'pointer' }}>
+                    <motion.tr key={i} onClick={() => setSelectedTactic(c.tactic)} style={{ cursor: 'pointer' }} whileHover={{ backgroundColor: 'rgba(255,255,255,0.02)' }}>
                       <td style={{ fontWeight: 500, color: '#F0EFE9' }}>{c.tactic}</td>
                       <td><code style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#378ADD' }}>{c.technique_id}</code></td>
                       <td>{c.technique_name}</td>
@@ -205,18 +220,18 @@ export default function MitreView({ stats }) {
                           </a>
                         )}
                       </td>
-                    </tr>
+                    </motion.tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-        </div>
+        </HoverCard>
       )}
 
       {/* ── Coverage Gap Analysis ── */}
       {inactiveTactics.length > 0 && (
-        <div className="panel">
+        <HoverCard className="panel">
           <div className="panel-header">
             <div className="panel-title">
               <ShieldOff size={16} style={{ color: '#F59E0B' }} />
@@ -227,40 +242,42 @@ export default function MitreView({ stats }) {
             <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 4 }}>
               The following ATT&CK tactics have zero detections. This may indicate blind spots in your monitoring coverage.
             </div>
-            {inactiveTactics.map(t => (
-              <div key={t.id} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px',
-                background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 8
-              }}>
-                <div style={{ fontSize: 16, flexShrink: 0 }}>{t.icon}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                    <span style={{ fontWeight: 600, fontSize: 12, color: '#F0EFE9' }}>{t.name}</span>
-                    <code style={{ fontSize: 10, color: '#4B5563', fontFamily: "'JetBrains Mono', monospace" }}>{t.id}</code>
+            <StaggeredList style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {inactiveTactics.map(t => (
+                <StaggeredItem key={t.id} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 14px',
+                  background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 8
+                }}>
+                  <div style={{ fontSize: 16, flexShrink: 0 }}>{t.icon}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 600, fontSize: 12, color: '#F0EFE9' }}>{t.name}</span>
+                      <code style={{ fontSize: 10, color: '#4B5563', fontFamily: "'JetBrains Mono', monospace" }}>{t.id}</code>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#9CA3AF', lineHeight: 1.6 }}>
+                      {TACTIC_BLIND_SPOTS[t.name] || 'No detection rules active for this tactic.'}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: '#9CA3AF', lineHeight: 1.6 }}>
-                    {TACTIC_BLIND_SPOTS[t.name] || 'No detection rules active for this tactic.'}
-                  </div>
-                </div>
-                <a href={`https://attack.mitre.org/tactics/${t.id}/`} target="_blank" rel="noopener noreferrer"
-                  style={{ color: '#4B5563', flexShrink: 0 }} title="View on MITRE">
-                  <ExternalLink size={12} />
-                </a>
-              </div>
-            ))}
+                  <a href={`https://attack.mitre.org/tactics/${t.id}/`} target="_blank" rel="noopener noreferrer"
+                    style={{ color: '#4B5563', flexShrink: 0 }} title="View on MITRE">
+                    <ExternalLink size={12} />
+                  </a>
+                </StaggeredItem>
+              ))}
+            </StaggeredList>
           </div>
-        </div>
+        </HoverCard>
       )}
 
       {/* Empty state */}
       {coverage.length === 0 && (
-        <div className="panel">
+        <HoverCard className="panel">
           <div className="panel-body" style={{ textAlign: 'center', padding: 40, color: '#6B7280' }}>
             <Grid3X3 size={40} style={{ opacity: 0.2, marginBottom: 16 }} />
             <div style={{ fontSize: 14, marginBottom: 8 }}>No MITRE ATT&CK data yet</div>
             <div style={{ fontSize: 12 }}>Run an OSINT scan to populate the ATT&CK matrix with real threat intelligence</div>
           </div>
-        </div>
+        </HoverCard>
       )}
     </div>
   );

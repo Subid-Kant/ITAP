@@ -12,7 +12,7 @@ export function WebSocketProvider({ children, onEvent }) {
   const reconnectTimer = useRef(null);
   const heartbeatTimer = useRef(null);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(function connectSocket() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
@@ -44,7 +44,7 @@ export function WebSocketProvider({ children, onEvent }) {
         setConnected(false);
         clearInterval(heartbeatTimer.current);
         // Auto-reconnect with backoff
-        reconnectTimer.current = setTimeout(() => connect(), 3000);
+        reconnectTimer.current = setTimeout(() => connectSocket(), 3000);
       };
     } catch { }
   }, [onEvent]);

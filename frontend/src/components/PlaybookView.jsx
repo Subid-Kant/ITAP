@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { BookOpen } from 'lucide-react';
 import { api } from '../api';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
+import AnimatedButton from './ui/AnimatedButton';
 
 const THREAT_TYPES = ['Remote Code Execution', 'SQL Injection', 'Denial of Service', 'Phishing', 'Brute Force', 'Zero-Day / Unknown'];
 const SEVERITIES = ['critical', 'high', 'medium', 'low'];
@@ -25,7 +28,7 @@ export default function PlaybookView() {
 
   return (
     <div className="fade-in">
-      <div className="panel" style={{ marginBottom: 20 }}>
+      <HoverCard className="panel" style={{ marginBottom: 20 }}>
         <div className="panel-header">
           <div className="panel-title"><BookOpen size={16} /> AI Playbook Generator</div>
         </div>
@@ -39,34 +42,34 @@ export default function PlaybookView() {
               style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid rgba(55,138,221,0.2)', background: '#151b2b', color: '#F0EFE9', fontSize: 13, fontFamily: 'inherit' }}>
               {SEVERITIES.map(s => <option key={s} value={s}>{s.toUpperCase()}</option>)}
             </select>
-            <button className="header-btn primary" onClick={generate} disabled={loading}>
+            <AnimatedButton className="header-btn primary" onClick={generate} disabled={loading}>
               <BookOpen size={14} /> {loading ? 'Generating...' : 'Generate Playbook'}
-            </button>
+            </AnimatedButton>
           </div>
           {loading && <div className="scanning"><div className="scanning-ring" /><div className="scanning-text">AI generating playbook...</div></div>}
         </div>
-      </div>
+      </HoverCard>
 
       {playbook && (
-        <div className="panel fade-in">
+        <HoverCard className="panel fade-in">
           <div className="panel-header">
             <div className="panel-title"><BookOpen size={16} /> {playbook.title}</div>
             <span className={`severity-badge ${severity}`}>{playbook.priority || severity.toUpperCase()}</span>
           </div>
           <div className="panel-body">
-            <div className="playbook">
+            <StaggeredList className="playbook">
               {(playbook.playbook_steps || []).map((s, i) => (
-                <div key={i} className="playbook-step">
+                <StaggeredItem key={i} className="playbook-step" whileHover={{ scale: 1.01, backgroundColor: 'rgba(255,255,255,0.02)' }}>
                   <div className="playbook-step-number">{s.step_number || i + 1}</div>
                   <div className="playbook-step-content">
                     <h4>{s.action}</h4>
                     <p>{s.detail}</p>
                   </div>
-                </div>
+                </StaggeredItem>
               ))}
-            </div>
+            </StaggeredList>
           </div>
-        </div>
+        </HoverCard>
       )}
     </div>
   );

@@ -1,4 +1,6 @@
 import { ShieldCheck, AlertCircle, Info, Activity, ShieldAlert, Clock } from 'lucide-react';
+import HoverCard from './ui/HoverCard';
+import { StaggeredList, StaggeredItem } from './ui/StaggeredList';
 
 export default function SecurityPostureView({ stats, scheduler }) {
   if (!stats) return null;
@@ -16,7 +18,7 @@ export default function SecurityPostureView({ stats, scheduler }) {
 
   return (
     <div className="fade-in">
-      <div className="panel glass" style={{ marginBottom: 24, border: `1px solid ${statusColor}33` }}>
+      <HoverCard className="panel glass" style={{ marginBottom: 24, border: `1px solid ${statusColor}33` }} tiltFactor={1.5} glare>
         <div className="panel-body" style={{ display: 'flex', alignItems: 'center', gap: 40, padding: '30px' }}>
           <div style={{ position: 'relative', width: 140, height: 140 }}>
             <svg viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)', width: '100%', height: '100%' }}>
@@ -65,28 +67,28 @@ export default function SecurityPostureView({ stats, scheduler }) {
             </div>
           </div>
         </div>
-      </div>
+      </HoverCard>
 
       <div className="content-grid">
-        <div className="panel glass">
+        <HoverCard className="panel glass">
           <div className="panel-header"><div className="panel-title"><ShieldAlert size={16} /> Intelligence Insights</div></div>
           <div className="panel-body">
-            <ul style={{ listStyle: 'none', padding: 0 }}>
+            <StaggeredList component="ul" style={{ listStyle: 'none', padding: 0 }} delay={0.05}>
               {[
                 { icon: Info, text: "Unusual traffic spikes detected from 3 Russian IP blocks.", color: 'var(--accent-orange)' },
                 { icon: AlertCircle, text: "4 CVEs identified in public-facing web servers require urgent patching.", color: 'var(--accent-red)' },
                 { icon: ShieldCheck, text: "DDoS mitigation successfully absorbed 45Gbps peak.", color: 'var(--accent-green)' }
               ].map((item, i) => (
-                <li key={i} style={{ display: 'flex', gap: 12, marginBottom: 16, fontSize: 13, alignItems: 'start' }}>
+                <StaggeredItem key={i} component="li" style={{ display: 'flex', gap: 12, marginBottom: 16, fontSize: 13, alignItems: 'start' }}>
                   <item.icon size={16} style={{ marginTop: 2, color: item.color }} />
                   <span style={{ color: 'var(--text-secondary)' }}>{item.text}</span>
-                </li>
+                </StaggeredItem>
               ))}
-            </ul>
+            </StaggeredList>
           </div>
-        </div>
+        </HoverCard>
         
-        <div className="panel glass">
+        <HoverCard className="panel glass">
           <div className="panel-header"><div className="panel-title"><Activity size={16} /> AI Predictive Status</div></div>
           <div className="panel-body">
              <div style={{ marginBottom: 15 }}>
@@ -111,7 +113,7 @@ export default function SecurityPostureView({ stats, scheduler }) {
                 Predictive window: Next 72 hours of operations are being analyzed. No major zero-day variants detected.
              </div>
           </div>
-        </div>
+        </HoverCard>
       </div>
     </div>
   );

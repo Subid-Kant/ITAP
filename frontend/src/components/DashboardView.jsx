@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import HoverCard from './ui/HoverCard';
 import {
   Shield, AlertTriangle, Activity, Target, Brain, Eye,
   Layers, Link2, ShieldAlert
@@ -36,7 +38,7 @@ function StatCard({ icon: Icon, value, label, color }) {
   const c = colorMap[color] || 'var(--accent-blue)';
 
   return (
-    <div className="stat-card" style={{ position: 'relative', overflow: 'hidden' }}>
+    <HoverCard className="stat-card" style={{ position: 'relative', overflow: 'hidden' }} tiltFactor={12}>
       <div className="stat-icon" style={{ color: c }}>
         <Icon size={20} />
       </div>
@@ -50,7 +52,7 @@ function StatCard({ icon: Icon, value, label, color }) {
           animation: 'criticalPulse 2s ease-in-out infinite',
         }} />
       )}
-    </div>
+    </HoverCard>
   );
 }
 
@@ -108,7 +110,7 @@ function ThreatTimeline({ threats }) {
     <div className="timeline">
       {(threats || []).slice(0, 8).map((t, i) => (
         <div key={i} className={`timeline-item ${t.severity}`}>
-          <div className="timeline-time">{new Date(t.detected_at).toLocaleTimeString()}</div>
+          <div className="timeline-time">{new Date(t.detected_at + 'Z').toLocaleTimeString()}</div>
           <div className="timeline-title">{t.title}</div>
           <div className="timeline-meta">
             <span className={`severity-badge ${t.severity}`}>{t.severity}</span>
@@ -142,38 +144,67 @@ export default function DashboardView({ stats }) {
     );
   }
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: { staggerChildren: 0.1 }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 300, damping: 24 } }
+  };
+
   return (
     <div className="fade-in">
       {/* Stat Cards with count-up animation */}
-      <div className="stats-grid stagger">
-        <StatCard icon={Target} value={stats.total_targets} label="Monitored Targets" color="blue" />
-        <StatCard icon={AlertTriangle} value={stats.active_threats} label="Active Threats" color="orange" />
-        <StatCard icon={Shield} value={stats.critical_threats} label="Critical Threats" color="red" />
-        <StatCard icon={Activity} value={stats.open_incidents} label="Open Incidents" color="purple" />
-        <StatCard icon={Brain} value={stats.predictions_active} label="Active Predictions" color="cyan" />
-        <StatCard icon={Eye} value={stats.anomalies_detected} label="Anomalies Detected" color="green" />
-      </div>
+      <motion.div 
+        className="stats-grid"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <motion.div variants={itemVariants}><StatCard icon={Target} value={stats.total_targets} label="Monitored Targets" color="blue" /></motion.div>
+        <motion.div variants={itemVariants}><StatCard icon={AlertTriangle} value={stats.active_threats} label="Active Threats" color="orange" /></motion.div>
+        <motion.div variants={itemVariants}><StatCard icon={Shield} value={stats.critical_threats} label="Critical Threats" color="red" /></motion.div>
+        <motion.div variants={itemVariants}><StatCard icon={Activity} value={stats.open_incidents} label="Open Incidents" color="purple" /></motion.div>
+        <motion.div variants={itemVariants}><StatCard icon={Brain} value={stats.predictions_active} label="Active Predictions" color="cyan" /></motion.div>
+        <motion.div variants={itemVariants}><StatCard icon={Eye} value={stats.anomalies_detected} label="Anomalies Detected" color="green" /></motion.div>
+      </motion.div>
 
       {/* Main content grid */}
-      <div className="content-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}>
-        <div className="panel">
+      <motion.div 
+        className="content-grid" 
+        style={{ gridTemplateColumns: '1fr 1fr 1fr' }}
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <HoverCard variants={itemVariants} className="panel">
           <div className="panel-header"><div className="panel-title"><AlertTriangle size={16} /> Threats by Severity</div></div>
           <div className="panel-body"><SeverityChart data={stats.threats_by_severity} /></div>
-        </div>
-        <div className="panel">
+        </HoverCard>
+        <HoverCard variants={itemVariants} className="panel">
           <div className="panel-header"><div className="panel-title"><Activity size={16} /> Threat Timeline</div></div>
           <div className="panel-body"><ThreatTimeline threats={stats.recent_threats} /></div>
-        </div>
-        <div className="panel" style={{ gridRow: 'span 2' }}>
+        </HoverCard>
+        <HoverCard variants={itemVariants} className="panel" style={{ gridRow: 'span 2' }}>
           <LiveSystemLog />
-        </div>
-      </div>
+        </HoverCard>
+      </motion.div>
 
 
 
       {/* Second row: Threats + Attack Surface */}
-      <div className="content-grid">
-        <div className="panel">
+      <motion.div 
+        className="content-grid"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <HoverCard variants={itemVariants} className="panel">
           <div className="panel-header"><div className="panel-title"><Shield size={16} /> Recent Threats</div></div>
           <div className="panel-body no-pad">
             <table className="threat-table">
@@ -182,22 +213,27 @@ export default function DashboardView({ stats }) {
               </thead>
               <tbody>
                 {(stats.recent_threats || []).slice(0, 6).map((t, i) => (
-                  <tr key={i}>
+                  <motion.tr 
+                    key={i} 
+                    initial={{ opacity: 0, x: -10 }} 
+                    animate={{ opacity: 1, x: 0 }} 
+                    transition={{ delay: i * 0.05 }}
+                  >
                     <td style={{ color: '#F0EFE9', fontWeight: 500 }}>{t.title}</td>
                     <td><span className={`severity-badge ${t.severity}`}>{t.severity}</span></td>
                     <td>{t.mitre_tactic || '—'}</td>
                     <td style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 11 }}>
-                      {t.detected_at ? new Date(t.detected_at).toLocaleTimeString() : '—'}
+                      {t.detected_at ? new Date(t.detected_at + 'Z').toLocaleTimeString() : '—'}
                     </td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
+        </HoverCard>
 
         {/* NEW: Attack Surface Panel */}
-        <div className="panel">
+        <HoverCard variants={itemVariants} className="panel">
           <div className="panel-header">
             <div className="panel-title">
               <Layers size={16} style={{ color: '#F59E0B' }} />
@@ -208,29 +244,39 @@ export default function DashboardView({ stats }) {
           <div className="panel-body">
             <AttackSurfacePanel data={stats.attack_surface_summary} />
           </div>
-        </div>
-      </div>
+        </HoverCard>
+      </motion.div>
 
       {/* Incidents row */}
-      <div className="content-grid">
-        <div className="panel">
+      <motion.div 
+        className="content-grid"
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+      >
+        <HoverCard variants={itemVariants} className="panel">
           <div className="panel-header"><div className="panel-title"><ShieldAlert size={16} /> Open Incidents</div></div>
           <div className="panel-body no-pad">
             <table className="threat-table">
               <thead><tr><th>Incident</th><th>Severity</th><th>Status</th></tr></thead>
               <tbody>
                 {(stats.recent_incidents || []).slice(0, 6).map((inc, i) => (
-                  <tr key={i}>
+                  <motion.tr 
+                    key={i}
+                    initial={{ opacity: 0, x: -10 }} 
+                    animate={{ opacity: 1, x: 0 }} 
+                    transition={{ delay: i * 0.05 }}
+                  >
                     <td style={{ color: '#F0EFE9', fontWeight: 500 }}>{inc.title}</td>
                     <td><span className={`severity-badge ${inc.severity}`}>{inc.severity}</span></td>
                     <td><span className={`status-badge ${inc.status}`}>● {inc.status}</span></td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
+        </HoverCard>
+      </motion.div>
 
       <style>{`
         @keyframes criticalPulse {
