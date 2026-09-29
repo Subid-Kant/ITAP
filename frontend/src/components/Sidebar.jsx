@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Activity, AlertTriangle, Target, Brain, Eye, LayoutDashboard, Crosshair, BookOpen, Bell, Map, Grid3X3, Search, FileText, LogOut, User, ChevronLeft, ChevronRight, Wifi } from 'lucide-react';
+import { Shield, Activity, AlertTriangle, Target, Brain, Eye, LayoutDashboard, Crosshair, BookOpen, Bell, Map, Grid3X3, Search, FileText, LogOut, User, ChevronLeft, ChevronRight, Wifi, Settings } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { motion } from 'framer-motion';
 import AnimatedButton from './ui/AnimatedButton';
@@ -130,24 +130,41 @@ export default function Sidebar({ activeView, setActiveView, stats, user, onLogo
                     </div>
                   </div>
                 </div>
-                {onLogout && (
+                <div style={{ display: 'flex', gap: 4 }}>
                   <AnimatedButton 
-                    className="icon-btn" 
-                    onClick={onLogout} 
-                    title="Sign out" 
-                    style={{ padding: 6, background: 'transparent', flexShrink: 0 }}
+                    className={`icon-btn ${activeView === 'settings' ? 'active' : ''}`} 
+                    onClick={() => setActiveView('settings')} 
+                    title="Settings" 
+                    style={{ padding: 6, background: activeView === 'settings' ? 'rgba(255,255,255,0.1)' : 'transparent', flexShrink: 0, color: activeView === 'settings' ? 'var(--accent-blue)' : 'var(--text-muted)' }}
                   >
-                    <LogOut size={14} />
+                    <Settings size={14} />
                   </AnimatedButton>
-                )}
+                  {onLogout && (
+                    <AnimatedButton 
+                      className="icon-btn" 
+                      onClick={onLogout} 
+                      title="Sign out" 
+                      style={{ padding: 6, background: 'transparent', flexShrink: 0 }}
+                    >
+                      <LogOut size={14} />
+                    </AnimatedButton>
+                  )}
+                </div>
               </div>
             )}
           </>
         )}
-        {collapsed && onLogout && (
-          <AnimatedButton className="icon-btn" onClick={onLogout} title="Sign out" style={{ margin: '0 auto', padding: 6, background: 'transparent' }}>
-            <LogOut size={14} />
-          </AnimatedButton>
+        {collapsed && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '0 auto' }}>
+            <AnimatedButton className={`icon-btn ${activeView === 'settings' ? 'active' : ''}`} onClick={() => setActiveView('settings')} title="Settings" style={{ padding: 6, background: activeView === 'settings' ? 'rgba(255,255,255,0.1)' : 'transparent', color: activeView === 'settings' ? 'var(--accent-blue)' : 'var(--text-muted)' }}>
+              <Settings size={14} />
+            </AnimatedButton>
+            {onLogout && (
+              <AnimatedButton className="icon-btn" onClick={onLogout} title="Sign out" style={{ padding: 6, background: 'transparent' }}>
+                <LogOut size={14} />
+              </AnimatedButton>
+            )}
+          </div>
         )}
       </div>
     </aside>

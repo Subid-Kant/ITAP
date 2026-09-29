@@ -1,0 +1,52 @@
+{
+  "concurrent-test-ea17c480ab814fefaf1b5c1cf1824224.example.com": {
+    "fingerprint": "9fae5c57c62e88c5fa5dccbf6d0fa1baab706bcd7900b971c7b36bdbd46c8ca9",
+    "last_event_id": "evt-6c810b4a",
+    "timestamp": "2026-09-16T16:06:58.719434"
+  },
+  "concurrent-test-ba3f070c22274b02a8ce6765a80e9903.example.com": {
+    "fingerprint": "8e32a0b2a93fa283b39dd3eddb5b69938aaa3fb85afd0372811e9c52ec33960a",
+    "last_event_id": "evt-0792dca4",
+    "timestamp": "2026-09-16T16:07:41.801818"
+  },
+  "concurrent-test-b363df8b015443c9a1258e1b15ed23e7.example.com": {
+    "fingerprint": "ee565f68bb5e074dc951f8e2c449d531f3691e1a49841feee1c5149ffc635801",
+    "last_event_id": "evt-05dc4be9",
+    "timestamp": "2026-09-16T16:08:56.756178"
+  },
+  "concurrent-test-ab1c7b460cc14551858012462d341977.example.com": {
+    "fingerprint": "cbdc62066601d7b080a75cbff6ef470418736df1295bc629af971b4896c21049",
+    "last_event_id": "evt-f1294cb0",
+    "timestamp": "2026-09-16T16:12:35.442121"
+  },
+  "scanme.nmap.org": {
+    "fingerprint": "466d0c102f1222006105a30dd93b1b1208f5972371e63c0b010809f59c4c957e",
+    "last_event_id": "evt-8de9e380",
+    "timestamp": "2026-09-16T18:20:51.912648"
+  },
+  "badssl.com": {
+    "fingerprint": "3064ef616dba38ad72376d9e2a644fccb4e2e7655b8dcfa21243ff9572c3c61a",
+    "last_event_id": "evt-cc311ed4",
+    "timestamp": "2026-09-22T04:21:44.497507"
+  },
+  "concurrent-test-9e25de4264bd4e1da4efc6e607a9fb4c.example.com": {
+    "fingerprint": "8bef201a8e03bb069810b3a8eee5b1d5b0ae3bd21eab820cc3df590697adc3ad",
+    "last_event_id": "evt-3088d36b",
+    "timestamp": "2026-09-26T12:00:58.407742"
+  },
+  "demo.owasp-juice.shop": {
+    "fingerprint": "497c9f2af8a414d47ea23f3784c71d3d945e40a2c769ef93c0da2df01f456948",
+    "last_event_id": "evt-800f931d",
+    "timestamp": "2026-09-26T14:49:08.790590"
+  },
+  "testphp.vulnweb.com": {
+    "fingerprint": "6239eb064567b17c1bae489d63d0dbcb60f60c73c4a74a53cd912e5a1e99f391",
+    "last_event_id": "evt-d56f2a53",
+    "timestamp": "2026-09-26T15:20:17.292840"
+  },
+  "vulnhub.com": {
+    "fingerprint": "d91aea6da685cc965da6e69bbdb3e9cbf7874f3f680111a170ad138f927dde80",
+    "last_event_id": "evt-f7d67cd1",
+    "timestamp": "2026-09-26T15:28:56.984471"
+  }
+}

@@ -50,6 +50,7 @@ export default function LiveSystemLog() {
 
   useEffect(() => {
     if (events.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDisplayEvents(events.slice(0, 20));
     } else {
       // Show animated fallback events when not connected

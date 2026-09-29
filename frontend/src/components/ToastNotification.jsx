@@ -8,6 +8,10 @@ let toastIdCounter = 0;
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
 
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
   const addToast = useCallback((message, type = 'info', duration = 5000) => {
     const id = ++toastIdCounter;
     setToasts(prev => [...prev.slice(-4), { id, message, type, duration }]);
@@ -15,11 +19,7 @@ export function ToastProvider({ children }) {
       setTimeout(() => removeToast(id), duration);
     }
     return id;
-  }, []);
-
-  const removeToast = useCallback((id) => {
-    setToasts(prev => prev.filter(t => t.id !== id));
-  }, []);
+  }, [removeToast]);
 
   return (
     <ToastContext.Provider value={{ addToast, removeToast }}>
@@ -29,6 +29,7 @@ export function ToastProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useToast() {
   const ctx = useContext(ToastContext);
   if (!ctx) return { addToast: () => {}, removeToast: () => {} };
@@ -67,7 +68,8 @@ function ToastItem({ toast, onRemove }) {
       const timer = setTimeout(() => handleClose(), toast.duration - 300);
       return () => clearTimeout(timer);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toast.duration]);
 
   return (
     <div className={`toast-item ${TYPE_CLASSES[toast.type] || 'toast-info'} ${exiting ? 'toast-exit' : 'toast-enter'}`}>

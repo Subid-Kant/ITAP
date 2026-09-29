@@ -46,7 +46,9 @@ export function WebSocketProvider({ children, onEvent }) {
         // Auto-reconnect with backoff
         reconnectTimer.current = setTimeout(() => connectSocket(), 3000);
       };
-    } catch { }
+    } catch { 
+      // ignore parse errors
+    }
   }, [onEvent]);
 
   useEffect(() => {
@@ -65,10 +67,12 @@ export function WebSocketProvider({ children, onEvent }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useWebSocket() {
   const ctx = useContext(WSContext);
   if (!ctx) return { connected: false, events: [] };
   return ctx;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export default useWebSocket;

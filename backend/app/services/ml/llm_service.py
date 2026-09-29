@@ -22,23 +22,28 @@ class LocalLLMService:
             return False
 
     @staticmethod
-    async def generate_prediction(domain: str, osint_data: dict) -> List[Dict[str, Any]]:
+    async def generate_prediction(domain: str, osint_data: dict, lstm_results: Any = None, autoencoder_results: Any = None) -> List[Dict[str, Any]]:
         """
         Prompt the local Llama 3 model to predict threats based on OSINT data.
-        Falls back to Statistical ML Engine (LSTMPredictor) if LLM is unreachable or fails.
+        Integrates math outputs from the LSTM and Autoencoder ensemble models.
+        Falls back to Statistical ML Engine (lstm_results) if LLM is unreachable or fails.
         """
         import re
 
         if not await LocalLLMService.is_ollama_available():
             logger.warning("Ollama LLM unreachable. Falling back to Statistical ML Engine (LSTMPredictor).")
+            if lstm_results:
+                return lstm_results
             from app.services.ml.ml_engine import LSTMPredictor
             return await LSTMPredictor.predict_threats(domain, osint_data)
 
         prompt = f"""
-        You are an elite Incident Responder and Forensics Analyst. Perform a deep-dive technical threat analysis for the target: {domain}.
-        OSINT Intelligence: {json.dumps(osint_data.get('summary', {}))}
+        You are an elite Incident Responder and Forensics Analyst. Review the following evidence for the target: {domain}.
+        - OSINT Summary: {json.dumps(osint_data.get('summary', {}))}
+        - LSTM Time-Series Predictions: {json.dumps(lstm_results) if lstm_results else 'None'}
+        - Autoencoder Anomaly Detection: {json.dumps(autoencoder_results) if autoencoder_results else 'None'}
         
-        Predict the top 3 most likely cyber attacks targeting this infrastructure.
+        Based on ALL of this numeric and textual evidence, generate the final JSON triage and predict the top 3 most likely cyber attacks.
         For each threat, your analysis MUST be hyper-specific and technical:
         1. The exact attack type and CVE if applicable.
         2. ROOT CAUSE: Describe the precise memory flaw, architectural weakness, or misconfiguration (e.g., "Use-after-free in nf_tables", "Unsanitized input to eval()").
@@ -101,13 +106,16 @@ class LocalLLMService:
                             return predictions
                         except json.JSONDecodeError:
                             logger.error(f"Failed to parse LLM JSON. Falling back to ML Engine. Cleaned text: {cleaned_json[:200]}")
+                            if lstm_results: return lstm_results
                             from app.services.ml.ml_engine import LSTMPredictor
                             return await LSTMPredictor.predict_threats(domain, osint_data)
                     else:
+                        if lstm_results: return lstm_results
                         from app.services.ml.ml_engine import LSTMPredictor
                         return await LSTMPredictor.predict_threats(domain, osint_data)
         except Exception as e:
             logger.error(f"Error connecting to local LLM: {e}. Falling back to ML Engine.")
+            if lstm_results: return lstm_results
             from app.services.ml.ml_engine import LSTMPredictor
             return await LSTMPredictor.predict_threats(domain, osint_data)
 

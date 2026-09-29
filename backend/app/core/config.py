@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     ANALYST_PASSWORD: str = "ITAP@Analyst2025!"
     VIEWER_PASSWORD: str = "ITAP@Viewer2025!"
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if self.ADMIN_PASSWORD == "ITAP@Admin2025!":
+            import logging
+            logging.warning("CRITICAL: Using default ADMIN_PASSWORD! Do not use this in production.")
+
     # ── CORS ────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174"
 

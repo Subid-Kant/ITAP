@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Command, Search, Crosshair, LayoutDashboard, Shield, Activity, Brain,
-  Grid3X3, Link2, Globe, BookOpen, FileText, History, Map, Zap, X } from 'lucide-react';
+  Grid3X3, Link2, Globe, BookOpen, FileText, History, Map, Zap, X, Settings } from 'lucide-react';
 
 const COMMANDS = [
   { id: 'dashboard',   label: 'SOC Dashboard',        icon: LayoutDashboard, desc: 'Overview, stats & kill chain map',    view: 'dashboard',   shortcut: '1' },
@@ -17,6 +17,7 @@ const COMMANDS = [
   { id: 'history',     label: 'Scan History',          icon: History,         desc: 'Past scans and archived sessions',    view: 'history'  },
   { id: 'posture',     label: 'Security Posture',      icon: Map,             desc: 'Overall security health assessment',  view: 'posture'  },
   { id: 'anomalies',   label: 'Anomaly Detection',     icon: Activity,        desc: 'Autoencoder anomaly analysis',        view: 'anomalies' },
+  { id: 'settings',    label: 'Platform Settings',     icon: Settings,        desc: 'Configuration, keys, & appearance',   view: 'settings' },
 ];
 
 export default function CommandPalette({ open, onClose, onNavigate }) {
@@ -26,6 +27,7 @@ export default function CommandPalette({ open, onClose, onNavigate }) {
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setQuery('');
       setSelected(0);
       setTimeout(() => inputRef.current?.focus(), 50);

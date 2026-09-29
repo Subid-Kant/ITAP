@@ -30,7 +30,8 @@ from app.schemas.schemas import (
 )
 from app.services.osint import OSINTAggregator, NmapService
 from app.services.ml.llm_service import LocalLLMService
-from app.services.ml.ml_engine import SeverityScorer
+from app.services.ml.ml_engine import SeverityScorer, LSTMPredictor, AutoencoderDetector
+from app.services.telemetry_service import TelemetryCollector
 from app.services.threat_intel.threat_intel_service import KillChainEngine, MITREMapper, ThreatDNAFingerprinter, IOCEnricher
 from app.services.response.response_service import PlaybookGenerator
 from app.services.monitoring.server_monitor import server_monitor
@@ -56,13 +57,20 @@ async def check_admin_role(current_user: dict = Depends(get_current_user)) -> di
 # Authentication
 # ─────────────────────────────────────────────
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class RefreshRequest(BaseModel):
+    token: str
+
 @router.post("/auth/login", tags=["Authentication"])
-async def login(username: str, password: str):
+async def login(req: LoginRequest):
     """
-    Authenticate with username and password.
+    Authenticate with username and password via JSON body.
     Returns JWT access token + refresh token.
     """
-    user = authenticate_user(username, password)
+    user = authenticate_user(req.username, req.password)
     if not user:
         raise HTTPException(
             status_code=401,
@@ -75,7 +83,7 @@ async def login(username: str, password: str):
     refresh_token = create_refresh_token(
         data={"sub": user["username"], "role": user["role"]}
     )
-    logger.info(f"Login successful: {username} (role={user['role']})")
+    logger.info(f"Login successful: {req.username} (role={user['role']})")
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -90,10 +98,10 @@ async def login(username: str, password: str):
 
 
 @router.post("/auth/refresh", tags=["Authentication"])
-async def refresh_token(token: str):
-    """Exchange a refresh token for a new access token."""
+async def refresh_token(req: RefreshRequest):
+    """Exchange a refresh token for a new access token via JSON body."""
     from app.core.security import decode_token
-    payload = decode_token(token)
+    payload = decode_token(req.token)
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     new_access = create_access_token(
@@ -134,8 +142,16 @@ async def create_target(
     """Register a new target domain/IP for monitoring."""
     # Check for duplicate
     existing = await db.execute(select(Target).where(Target.domain == target.domain))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"Target '{target.domain}' already exists")
+    existing_target = existing.scalar_one_or_none()
+    if existing_target:
+        existing_target.updated_at = datetime.utcnow()
+        if target.ip_address:
+            existing_target.ip_address = target.ip_address
+        if target.organization:
+            existing_target.organization = target.organization
+        await db.commit()
+        await db.refresh(existing_target)
+        return existing_target
 
     new_target = Target(
         id=str(uuid.uuid4()),
@@ -223,6 +239,23 @@ async def run_osint_scan(
     # Check if Nmap active scanning is requested
     nmap_enabled = getattr(request, 'nmap_enabled', False)
     nmap_scan_type = getattr(request, 'nmap_scan_type', 'standard')
+    nmap_custom_ports = getattr(request, 'nmap_custom_ports', None)
+
+    if nmap_enabled:
+        if current_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Active Nmap scanning requires admin privileges.")
+        
+        # Resolve target and check for private/internal IPs to prevent SSRF
+        import socket
+        import ipaddress
+        nmap_target = target.ip_address or target.domain
+        try:
+            resolved_ip = socket.gethostbyname(nmap_target)
+            ip_obj = ipaddress.ip_address(resolved_ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_link_local:
+                raise HTTPException(status_code=400, detail="Scanning internal, reserved, or loopback IPs is prohibited.")
+        except socket.gaierror:
+            raise HTTPException(status_code=400, detail=f"Could not resolve target hostname: {nmap_target}")
 
     scan_detail = "Running Shodan, VirusTotal, CVE/NVD, AlienVault OTX"
     if nmap_enabled:
@@ -245,8 +278,9 @@ async def run_osint_scan(
                 detail=f"Scan type: {nmap_scan_type} — this may take 30-120 seconds"
             )
             nmap_results = await NmapService.scan(
-                target=nmap_target,
+                target=resolved_ip,
                 scan_type=nmap_scan_type,
+                ports=nmap_custom_ports,
             )
             osint_results = NmapService.merge_with_osint(nmap_results, osint_results)
             await ws_manager.broadcast_system_event(
@@ -287,18 +321,33 @@ async def run_osint_scan(
     mapped_ports = sorted(list(set(mapped_ports)))
     mapped_vulns = sorted(list(set(mapped_vulns)))
 
-    scan = Scan(
-        id=str(uuid.uuid4()),
-        target_id=target.id,
-        scan_type=scan_type_label,
-        status=DBScanStatus.COMPLETED,
-        results=osint_results,
-        open_ports=mapped_ports,
-        vulnerabilities=mapped_vulns,
-        reputation_score=osint_results.get("risk_score"),
-        completed_at=datetime.utcnow(),
-    )
-    db.add(scan)
+    # Fetch existing scan for this target if it exists
+    existing_scan = (await db.execute(select(Scan).where(Scan.target_id == target.id))).scalar_one_or_none()
+
+    if existing_scan:
+        scan = existing_scan
+        scan.scan_type = scan_type_label
+        scan.status = DBScanStatus.COMPLETED
+        scan.results = osint_results
+        scan.open_ports = mapped_ports
+        scan.vulnerabilities = mapped_vulns
+        scan.reputation_score = osint_results.get("risk_score")
+        scan.completed_at = datetime.utcnow()
+        scan.started_at = datetime.utcnow()  # Update started_at to reflect latest scan time
+    else:
+        scan = Scan(
+            id=str(uuid.uuid4()),
+            target_id=target.id,
+            scan_type=scan_type_label,
+            status=DBScanStatus.COMPLETED,
+            results=osint_results,
+            open_ports=mapped_ports,
+            vulnerabilities=mapped_vulns,
+            reputation_score=osint_results.get("risk_score"),
+            completed_at=datetime.utcnow(),
+            started_at=datetime.utcnow()
+        )
+        db.add(scan)
 
     threats_created = []
 
@@ -387,8 +436,20 @@ async def run_osint_scan(
 
 
 
-    # 2. Get Threat Predictions (via LLM)
-    predictions = await LocalLLMService.generate_prediction(target.domain, osint_results)
+    # 2. Get Mathematical ML Predictions (Ensemble Layer)
+    lstm_results = await LSTMPredictor.predict_threats(target.domain, osint_results)
+    
+    # Autoencoder expects generic dict if traffic_data is not available, 
+    # but we will just pass a generic feature dict generated from the osint data for now.
+    autoencoder_results = await AutoencoderDetector.detect_anomalies()
+
+    # 3. Pass math outputs to LLM Triage (Integration Layer)
+    predictions = await LocalLLMService.generate_prediction(
+        target.domain, 
+        osint_results, 
+        lstm_results=lstm_results, 
+        autoencoder_results=autoencoder_results
+    )
 
     for pred in predictions[:5]:
         if pred["probability"] > 0.5:
@@ -463,6 +524,33 @@ async def run_osint_scan(
         "risk_level": osint_results.get("risk_level"),
         "threats_created": len(threats_created),
     })
+
+    from app.services.ml.ml_engine import MODELS_LOADED
+    try:
+        from app.services.ml.ml_engine import lstm_killchain_engine, ae_engine
+        lstm_mocked = getattr(lstm_killchain_engine, 'is_mocked', False)
+        ae_mocked = getattr(ae_engine, 'is_mocked', False)
+    except ImportError:
+        lstm_mocked = True
+        ae_mocked = True
+
+    model_metadata = {
+        "models_loaded": MODELS_LOADED,
+        "lstm_mocked": lstm_mocked,
+        "ae_mocked": ae_mocked,
+        "llm_available": await LocalLLMService.is_ollama_available()
+    }
+
+    # Telemetry: Log the scan to the custom ML dataset in the background
+    background_tasks.add_task(
+        TelemetryCollector.log_scan,
+        target.domain,
+        osint_results,
+        lstm_results,
+        autoencoder_results,
+        predictions,
+        model_metadata
+    )
 
     is_admin = current_user.get("role") == "admin"
 
@@ -593,7 +681,18 @@ async def predict_threats(
     """Run Llama 3 threat prediction for a domain."""
     # Use real OSINT scanner for live data
     osint_results = await OSINTAggregator.full_scan(domain, "")
-    predictions = await LocalLLMService.generate_prediction(domain, osint_results)
+    
+    # Compute Ensemble Context
+    lstm_results = await LSTMPredictor.predict_threats(domain, osint_results)
+    autoencoder_results = await AutoencoderDetector.detect_anomalies()
+    
+    # Pass to LLM
+    predictions = await LocalLLMService.generate_prediction(
+        domain, 
+        osint_results,
+        lstm_results=lstm_results,
+        autoencoder_results=autoencoder_results
+    )
 
     return {
         "domain": domain,
@@ -906,16 +1005,6 @@ async def create_incident(
 
     return new_incident
 
-@router.get("/ml/status", tags=["AI/ML Engine"])
-async def get_ml_status():
-    """Get the status of the local LLM and ML Engine."""
-    from app.services.ml.llm_service import llm_service
-    is_online = await llm_service.is_ollama_available()
-    return {
-        "engine": "Llama 3 8B (LoRA)" if is_online else "Statistical ML Engine",
-        "status": "online" if is_online else "fallback",
-        "message": "Local LLM is running." if is_online else "LLM unreachable. Using deterministic ML fallbacks."
-    }
 
 @router.get("/incidents", response_model=List[IncidentResponse], tags=["Incident Response"])
 async def list_incidents(

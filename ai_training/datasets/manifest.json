@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-09-21T05:13:43.722183+00:00",
+  "seed": 20260916,
+  "files": {
+    "itap_llama3_qlora.jsonl": 960,
+    "itap_lstm_exploit_sequences.jsonl": 2400,
+    "itap_autoencoder_network_flows.jsonl": 4000
+  },
+  "warning": "All records are synthetic seed data, not evidence of real attacks or model-quality labels."
+}

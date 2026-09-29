@@ -16,8 +16,10 @@ async function processRefreshQueue(token) {
 async function refreshAccessToken() {
   const refresh = localStorage.getItem(REFRESH_KEY);
   if (!refresh) throw new Error('No refresh token');
-  const res = await fetch(`${API_BASE}/auth/refresh?token=${encodeURIComponent(refresh)}`, {
+  const res = await fetch(`${API_BASE}/auth/refresh`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: refresh }),
   });
   if (!res.ok) throw new Error('Refresh failed');
   const data = await res.json();
@@ -81,10 +83,10 @@ export const api = {
 
   // ── Authentication ──────────────────────────────────────
   login: (username, password) =>
-    request(`/auth/login?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`, { method: 'POST' }),
+    request(`/auth/login`, { method: 'POST', body: JSON.stringify({ username, password }) }),
 
   refreshToken: (token) =>
-    request(`/auth/refresh?token=${encodeURIComponent(token)}`, { method: 'POST' }),
+    request(`/auth/refresh`, { method: 'POST', body: JSON.stringify({ token }) }),
 
   getMe: () => request('/auth/me'),
 

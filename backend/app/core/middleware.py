@@ -102,6 +102,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         now = time.time()
+        
+        self._store.setdefault(client_ip, [])
+        self._store[client_ip] = [t for t in self._store[client_ip] if now - t < self.window_seconds]
 
         if len(self._store[client_ip]) >= self.max_requests:
             from fastapi.responses import JSONResponse

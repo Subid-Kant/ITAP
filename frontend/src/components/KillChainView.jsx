@@ -208,11 +208,11 @@ export default function KillChainView({ stats }) {
     } finally {
       setLoading(false);
     }
-  }, [currentPhase, relatedThreat?.id]);
+  }, [currentPhase, relatedThreat?.id, currentIdx, selectedPhaseIdx]);
 
   useEffect(() => {
     loadKillChain();
-  }, [currentPhase, refreshKey]);
+  }, [currentPhase, refreshKey, loadKillChain]);
 
   // Determine which phase is selected and what data to show
   const selectedPhase = selectedPhaseIdx !== null ? PHASES[selectedPhaseIdx] : currentPhase;

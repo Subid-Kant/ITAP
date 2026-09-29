@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './index.css';
+import './settings-overrides.css';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import DashboardView from './components/DashboardView';
@@ -18,10 +19,12 @@ import ReportsView from './components/ReportsView';
 import LoginView from './components/LoginView';
 import HistoryView from './components/HistoryView';
 import CommandPalette from './components/CommandPalette';
+import SettingsView from './components/SettingsView';
 import ToastProvider, { useToast } from './components/ToastNotification';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { WebSocketProvider } from './hooks/useWebSocket';
 import { useDashboard } from './hooks/useDashboard';
+import { SettingsProvider } from './hooks/useSettings';
 import { api } from './services/api';
 
 function AppContent() {
@@ -36,6 +39,8 @@ function AppContent() {
     active: false,
     domain: '',
     intervalMs: 60000,
+    nmapEnabled: false,
+    nmapType: 'standard',
     scanHistory: [],
     startedAt: null,
     totalScans: 0,
@@ -44,6 +49,7 @@ function AppContent() {
   });
   const schedulerIntervalRef = useRef(null);
   const schedulerTargetIdRef = useRef(null);
+  const schedulerNmapRef = useRef({ enabled: false, type: 'standard' });
 
   // Run a single scheduled scan cycle
   const runScheduledScan = useCallback(async (domain) => {
@@ -69,7 +75,12 @@ function AppContent() {
         schedulerTargetIdRef.current = targetId;
       }
       // Run scan
-      const scan = await api.runScan({ target_id: targetId, scan_types: ['shodan', 'virustotal', 'cve'] });
+      const scan = await api.runScan({ 
+        target_id: targetId, 
+        scan_types: ['shodan', 'virustotal', 'cve'],
+        nmap_enabled: schedulerNmapRef.current.enabled,
+        nmap_scan_type: schedulerNmapRef.current.type,
+      });
       // Record success
       const entry = {
         timestamp: Date.now(),
@@ -82,6 +93,16 @@ function AppContent() {
         scanning: false,
         totalScans: s.totalScans + 1,
         scanHistory: [entry, ...s.scanHistory].slice(0, 100),
+      }));
+      // Real-time Mapping: Push the scheduled scan results directly to the ScannerView
+      setScannerState(s => ({
+        ...s,
+        domain,
+        results: scan,
+        error: '',
+        // Optionally sync the nmap UI state with the scheduler's
+        nmapEnabled: schedulerNmapRef.current.enabled,
+        nmapType: schedulerNmapRef.current.type,
       }));
       // Refresh dashboard to propagate data to all tabs
       refresh();
@@ -103,17 +124,20 @@ function AppContent() {
     }
   }, [refresh, addToast, scheduler.totalScans]);
 
-  const startScheduler = useCallback((domain, intervalMs) => {
+  const startScheduler = useCallback((domain, intervalMs, nmapEnabled = false, nmapType = 'standard') => {
     // Clear any existing interval
     if (schedulerIntervalRef.current) {
       clearInterval(schedulerIntervalRef.current);
     }
     schedulerTargetIdRef.current = null;
+    schedulerNmapRef.current = { enabled: nmapEnabled, type: nmapType };
 
     setScheduler({
       active: true,
       domain,
       intervalMs,
+      nmapEnabled,
+      nmapType,
       scanHistory: [],
       startedAt: Date.now(),
       totalScans: 0,
@@ -201,7 +225,32 @@ function AppContent() {
     domain: '',
     results: null,
     error: '',
+    scanning: false,
+    nmapEnabled: false,
+    nmapType: 'standard',
   });
+
+  const handleScan = useCallback(async () => {
+    if (!scannerState.domain.trim() || user?.role === 'viewer') return;
+    setScannerState(s => ({ ...s, scanning: true, error: '', results: null }));
+    try {
+      const target = await api.createTarget({ domain: scannerState.domain.trim() });
+      const scan = await api.runScan({
+        target_id: target.id,
+        scan_types: ['shodan', 'virustotal', 'cve'],
+        nmap_enabled: scannerState.nmapEnabled,
+        nmap_scan_type: scannerState.nmapType,
+      });
+      setScannerState(s => ({ ...s, results: scan, scanning: false }));
+      refresh(); // Refresh dashboard
+    } catch (e) {
+      setScannerState(s => ({
+        ...s,
+        error: e.message || 'Scan failed. Please ensure backend services are running and the target is reachable.',
+        scanning: false,
+      }));
+    }
+  }, [scannerState.domain, scannerState.nmapEnabled, scannerState.nmapType, user?.role, refresh]);
 
   const handleScanComplete = useCallback(() => {
     // Refresh dashboard so new target/threats appear immediately
@@ -262,7 +311,7 @@ function AppContent() {
       case 'threats':     ViewComponent = <ThreatsView stats={stats} />; break;
       case 'incidents':   ViewComponent = <IncidentsView stats={stats} />; break;
       case 'scanner':     ViewComponent = <ScannerView
-                            onScanComplete={handleScanComplete}
+                            handleScan={handleScan}
                             scannerState={scannerState}
                             setScannerState={setScannerState}
                           />; break;
@@ -276,6 +325,7 @@ function AppContent() {
       case 'ioc':         ViewComponent = <IOCWorkbench />; break;
       case 'reports':     ViewComponent = <ReportsView scheduler={scheduler} />; break;
       case 'history':     ViewComponent = <HistoryView />; break;
+      case 'settings':    ViewComponent = <SettingsView />; break;
       default:            ViewComponent = <SecurityPostureView stats={stats} scheduler={scheduler} />; break;
     }
 
@@ -341,9 +391,11 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <ToastProvider>
-        <AppContent />
-      </ToastProvider>
+      <SettingsProvider>
+        <ToastProvider>
+          <AppContent />
+        </ToastProvider>
+      </SettingsProvider>
     </AuthProvider>
   );
 }

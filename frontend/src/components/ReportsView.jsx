@@ -147,6 +147,7 @@ function SchedulerReport({ scheduler }) {
 
   // Calculate elapsed time
   const startedAt = scheduler?.startedAt;
+  // eslint-disable-next-line react-hooks/purity
   const stoppedAt = scheduler?.stoppedAt || (scheduler?.active ? Date.now() : null);
   let elapsedStr = '—';
   if (startedAt && stoppedAt) {

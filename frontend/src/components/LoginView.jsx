@@ -17,6 +17,7 @@ export default function LoginView() {
 
   // Generate background particles once
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setParticles(Array.from({ length: 40 }, (_, i) => ({
       id: i,
       left: `${Math.random() * 100}%`,

@@ -475,51 +475,33 @@ function ScanModeToggle({ nmapEnabled, setNmapEnabled, nmapType, setNmapType, is
 }
 
 // ─── Main ScannerView ─────────────────────────────────────────
-export default function ScannerView({ onScanComplete, scannerState, setScannerState }) {
+export default function ScannerView({ handleScan, scannerState, setScannerState }) {
   const { user } = useAuth();
   const isViewer = user?.role === 'viewer';
   const isAdmin = user?.role === 'admin';
-  const [scanning, setScanning] = useState(false);
   const [activeTab, setActiveTab] = useState('summary');
-  const [nmapEnabled, setNmapEnabled] = useState(false);
-  const [nmapType, setNmapType] = useState('standard');
 
   const domain = scannerState?.domain ?? '';
   const results = scannerState?.results ?? null;
   const error = scannerState?.error ?? '';
+  const scanning = scannerState?.scanning ?? false;
+  const nmapEnabled = scannerState?.nmapEnabled ?? false;
+  const nmapType = scannerState?.nmapType ?? 'standard';
 
   const setDomain = (val) => setScannerState(s => ({ ...s, domain: val }));
   const setResults = (val) => setScannerState(s => ({ ...s, results: val }));
   const setError = (val) => setScannerState(s => ({ ...s, error: val }));
+  const setNmapEnabled = (val) => setScannerState(s => ({ ...s, nmapEnabled: val }));
+  const setNmapType = (val) => setScannerState(s => ({ ...s, nmapType: val }));
 
-  const handleScan = async () => {
-    if (!domain.trim() || isViewer) return;
-    setScanning(true);
-    setError('');
-    setResults(null);
+  const handleScanWrapper = () => {
     setActiveTab('summary');
-    try {
-      const target = await api.createTarget({ domain: domain.trim() });
-      const scan = await api.runScan({
-        target_id: target.id,
-        scan_types: ['shodan', 'virustotal', 'cve'],
-        nmap_enabled: nmapEnabled,
-        nmap_scan_type: nmapType,
-      });
-      setResults(scan);
-      if (onScanComplete) onScanComplete();
-    } catch (e) {
-      setError(e.message || 'Scan failed. Please ensure backend services are running and the target is reachable.');
-    } finally {
-      setScanning(false);
-    }
+    handleScan();
   };
 
   const handleClear = () => {
-    setScannerState({ domain: '', results: null, error: '' });
+    setScannerState({ domain: '', results: null, error: '', scanning: false, nmapEnabled: false, nmapType: 'standard' });
     setActiveTab('summary');
-    setNmapEnabled(false);
-    setNmapEnabled(false);
   };
 
   const vulnBySvc = results?.vulnerabilities_by_service || [];
@@ -565,12 +547,12 @@ export default function ScannerView({ onScanComplete, scannerState, setScannerSt
           placeholder="Enter domain or IP (e.g. example.com, 192.168.1.1)"
           value={domain} onChange={e => setDomain(e.target.value)}
           disabled={scanning || isViewer}
-          onKeyDown={e => e.key === 'Enter' && handleScan()}
+          onKeyDown={e => e.key === 'Enter' && handleScanWrapper()}
           style={{ transition: 'box-shadow 0.3s ease', outline: 'none' }}
           onFocus={(e) => e.target.style.boxShadow = '0 0 0 2px rgba(0, 163, 255, 0.4)'}
           onBlur={(e) => e.target.style.boxShadow = 'none'}
         />
-        <AnimatedButton variant="primary" onClick={handleScan} disabled={scanning || isViewer} title={isViewer ? 'Viewer mode — scan restricted' : ''}>
+        <AnimatedButton variant="primary" onClick={handleScanWrapper} disabled={scanning || isViewer} title={isViewer ? 'Viewer mode — scan restricted' : ''}>
           {isHybrid ? <Radar size={14} /> : <Crosshair size={14} />}
           {scanning ? (isHybrid ? 'Hybrid Scanning...' : 'Scanning...') : (isHybrid ? 'Hybrid Scan' : 'Deep Scan')}
         </AnimatedButton>

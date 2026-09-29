@@ -23,6 +23,8 @@ function formatElapsed(ms) {
 export default function SchedulerDropdown({ scheduler, onStart, onStop, onClose }) {
   const [domain, setDomain] = useState(scheduler.domain || '');
   const [intervalMs, setIntervalMs] = useState(scheduler.intervalMs || 60000);
+  const [nmapEnabled, setNmapEnabled] = useState(scheduler.nmapEnabled || false);
+  const [nmapType, setNmapType] = useState(scheduler.nmapType || 'standard');
   const dropdownRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
 
@@ -48,7 +50,7 @@ export default function SchedulerDropdown({ scheduler, onStart, onStop, onClose 
 
   const handleStart = () => {
     if (!domain.trim()) return;
-    onStart(domain.trim(), intervalMs);
+    onStart(domain.trim(), intervalMs, nmapEnabled, nmapType);
   };
 
   const riskColor = (score) => {
@@ -140,6 +142,59 @@ export default function SchedulerDropdown({ scheduler, onStart, onStop, onClose 
               opacity: scheduler.active ? 0.5 : 1,
             }}
           />
+        </div>
+
+        {/* Nmap Options */}
+        <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8, opacity: scheduler.active ? 0.5 : 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.8 }}>
+              Active Scan (Nmap)
+            </label>
+            <button
+              onClick={() => setNmapEnabled(!nmapEnabled)}
+              disabled={scheduler.active}
+              style={{
+                width: 32, height: 18, borderRadius: 10, border: 'none', cursor: scheduler.active ? 'not-allowed' : 'pointer',
+                background: (scheduler.active ? scheduler.nmapEnabled : nmapEnabled) ? '#00F5D4' : '#374151',
+                position: 'relative', transition: 'background 0.3s', padding: 0
+              }}
+            >
+              <div 
+                style={{
+                  width: 14, height: 14, borderRadius: '50%',
+                  background: (scheduler.active ? scheduler.nmapEnabled : nmapEnabled) ? '#0A0E17' : '#6B7280',
+                  position: 'absolute', top: 2, 
+                  left: (scheduler.active ? scheduler.nmapEnabled : nmapEnabled) ? 16 : 2,
+                  transition: 'left 0.3s'
+                }}
+              />
+            </button>
+          </div>
+          {(scheduler.active ? scheduler.nmapEnabled : nmapEnabled) && (
+            <div style={{ display: 'flex', gap: 4 }}>
+              {['quick', 'standard', 'deep'].map(t => {
+                const isActive = (scheduler.active ? scheduler.nmapType : nmapType) === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setNmapType(t)}
+                    disabled={scheduler.active}
+                    style={{
+                      flex: 1, fontSize: 10, fontWeight: 700, padding: '4px 0', borderRadius: 6,
+                      border: `1px solid ${isActive ? '#00F5D4' : 'rgba(255,255,255,0.08)'}`,
+                      background: isActive ? 'rgba(0,245,212,0.15)' : 'transparent',
+                      color: isActive ? '#00F5D4' : '#6B7280',
+                      cursor: scheduler.active ? 'not-allowed' : 'pointer', 
+                      textTransform: 'uppercase', letterSpacing: 0.5,
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Interval Selector */}

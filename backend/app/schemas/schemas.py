@@ -2,10 +2,11 @@
 ITAP — Pydantic Schemas
 Request/Response models for all API endpoints.
 """
-from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
+import re
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Enums ───
@@ -23,6 +24,13 @@ class ScanStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class NmapScanType(str, Enum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    DEEP = "deep"
+    AGGRESSIVE = "aggressive"
+    CUSTOM = "custom"
+
 
 class IncidentStatus(str, Enum):
     OPEN = "open"
@@ -37,6 +45,14 @@ class TargetCreate(BaseModel):
     domain: str
     ip_address: Optional[str] = None
     organization: Optional[str] = None
+
+    @field_validator("domain")
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
+        # Strict validation: Must not contain spaces, paths, or schema (must be hostname or IP)
+        if not re.match(r'^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$|^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$', v):
+            raise ValueError("Must be a valid hostname or IPv4 address")
+        return v
 
 
 class TargetResponse(BaseModel):
@@ -56,8 +72,35 @@ class ScanRequest(BaseModel):
     target_id: str
     scan_types: List[str] = Field(default=["shodan", "virustotal", "cve"])
     nmap_enabled: bool = Field(default=False, description="Enable active Nmap scanning")
-    nmap_scan_type: str = Field(default="standard", description="Nmap scan type: quick, standard, or deep")
+    nmap_scan_type: NmapScanType = Field(default=NmapScanType.STANDARD, description="Nmap scan type")
+    nmap_custom_ports: Optional[str] = Field(default=None, description="e.g. '80,443,8000-8080'")
 
+    @field_validator("nmap_custom_ports")
+    @classmethod
+    def validate_ports(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return v
+        parts = v.split(',')
+        for part in parts:
+            part = part.strip()
+            if '-' in part:
+                try:
+                    start, end = part.split('-')
+                    start, end = int(start), int(end)
+                    if not (1 <= start <= 65535 and 1 <= end <= 65535):
+                        raise ValueError("Ports must be between 1 and 65535")
+                    if start > end:
+                        raise ValueError("Port range start must be <= end")
+                except ValueError as e:
+                    raise ValueError(f"Invalid port range '{part}': {e}")
+            else:
+                try:
+                    p = int(part)
+                    if not (1 <= p <= 65535):
+                        raise ValueError("Ports must be between 1 and 65535")
+                except ValueError:
+                    raise ValueError(f"Invalid port '{part}'")
+        return v
 
 
 class ScanResponse(BaseModel):

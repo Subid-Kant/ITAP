@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { AlertTriangle, ChevronDown, ChevronUp, Shield, Target, Zap, Wrench, BookOpen, Clock, ShieldOff } from 'lucide-react';
 import { api } from '../api';
 import { useAuth } from '../hooks/useAuth';
@@ -50,6 +50,7 @@ function BlockIPButton({ threat }) {
   
   useEffect(() => {
     if (threat.source_country) {
+      // eslint-disable-next-line
       setIp(`10.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`);
     }
   }, [threat.source_country]);

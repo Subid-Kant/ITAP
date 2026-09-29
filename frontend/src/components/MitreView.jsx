@@ -41,7 +41,7 @@ const TACTIC_BLIND_SPOTS = {
 
 export default function MitreView({ stats }) {
   const [selectedTactic, setSelectedTactic] = useState(null);
-  const coverage = stats?.mitre_attack_coverage || [];
+  const coverage = useMemo(() => stats?.mitre_attack_coverage || [], [stats?.mitre_attack_coverage]);
 
   // Group techniques by tactic
   const tacticMap = useMemo(() => {

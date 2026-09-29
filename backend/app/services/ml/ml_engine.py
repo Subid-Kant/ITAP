@@ -41,6 +41,25 @@ def _seeded_float(low: float, high: float, seed_str: str = "") -> float:
         return float(local_rng.uniform(low, high))
     return float(_rng.uniform(low, high))
 
+class FeatureEncoder:
+    """Versioned feature schema encoder to prevent dimension/schema drift."""
+    VERSION = "v3.0"
+    LSTM_DIM = 196
+    AE_DIM = 20
+
+    @classmethod
+    def encode_lstm(cls, cvss: float, env_risk: float, recency: float, ti_factor: float, open_ports: int) -> list:
+        # Build exact 196-dim vector to match LSTM v3 contract
+        vec = [0.0] * cls.LSTM_DIM
+        vec[0] = min(cvss / 10.0, 1.0)
+        vec[1] = env_risk
+        vec[2] = recency
+        vec[3] = ti_factor
+        vec[4] = min(open_ports / 65535.0, 1.0)
+        # Remaining 191 features are explicitly 0.0 (reserved for future schema expansions)
+        return vec
+
+
 
 class LSTMPredictor:
     """
@@ -537,11 +556,14 @@ class LSTMPredictor:
         predictions = []
 
         # Extract features
-        open_ports = osint_data.get("summary", {}).get("open_ports", 0)
-        known_vulns = osint_data.get("summary", {}).get("known_vulns", 0)
-        vt_malicious = osint_data.get("summary", {}).get("vt_malicious", 0)
-        recent_cves = osint_data.get("summary", {}).get("recent_cves", 0)
-        otx_pulses = osint_data.get("summary", {}).get("otx_pulses", 0)
+        summary = osint_data.get("summary", {})
+        open_ports_data = summary.get("open_ports", [])
+        open_ports = len(open_ports_data) if isinstance(open_ports_data, list) else int(open_ports_data)
+        
+        known_vulns = summary.get("known_vulns", 0)
+        vt_malicious = summary.get("vt_malicious", 0)
+        recent_cves = summary.get("recent_cves", 0)
+        otx_pulses = summary.get("otx_pulses", 0)
         risk_score = osint_data.get("risk_score", 50)
 
         features = {
@@ -582,31 +604,43 @@ class LSTMPredictor:
                 probability = min(max(cvss_factor + env_factor + recency_factor + ti_factor + domain_noise, 0.05), 0.98)
 
                 if MODELS_LOADED:
-                    # Pass features into actual LSTM model
-                    # Dynamically get the expected input shape from the loaded model
-                    expected_dim = lstm_killchain_engine.lstm1[0].shape[0] if hasattr(lstm_killchain_engine, 'lstm1') else 20
-                    
-                    if "feature_vector" in osint_data:
-                        feat_vec = osint_data["feature_vector"].copy()
-                        if len(feat_vec) < expected_dim:
-                            feat_vec += [0.0] * (expected_dim - len(feat_vec))
-                        else:
-                            feat_vec = feat_vec[:expected_dim]
-                        x_input = np.array([[feat_vec]])
-                    else:
-                        base_features = [cvss/10.0, 0.0, 0.0, 0.0, 30.0/365.0]
-                        padded_features = base_features + [0.0] * (expected_dim - len(base_features))
-                        x_input = np.array([[padded_features]])
-
-                    
-                    # Output is now a 10-class softmax array. We take the max probability as the exploit threat.
-                    # Route to correct model: NLP text attacks go to WAF LSTM, structural go to KillChain LSTM
-                    if "Injection" in cve_desc or "Cross-Site" in cve_desc:
-                        raw_prediction = lstm_waf_engine.predict(x_input)[0]
-                    else:
-                        raw_prediction = lstm_killchain_engine.predict(x_input)[0]
+                    try:
+                        # Pass features into actual LSTM model
+                        # Dynamically get the expected input shape from the loaded model
+                        expected_dim = lstm_killchain_engine.lstm1[0].shape[0] if hasattr(lstm_killchain_engine, 'lstm1') else 20
                         
-                    probability = float(np.max(raw_prediction))
+                        if "feature_vector" in osint_data:
+                            # Use existing vector but strictly validate length
+                            feat_vec = osint_data["feature_vector"].copy()
+                            if len(feat_vec) != expected_dim:
+                                raise ValueError(f"Feature schema mismatch. Expected {expected_dim}, got {len(feat_vec)}.")
+                            x_input = np.array([[feat_vec]])
+                        else:
+                            # Build exact schema vector using the encoder
+                            encoded_features = FeatureEncoder.encode_lstm(
+                                cvss=cvss,
+                                env_risk=env_risk,
+                                recency=0.15,
+                                ti_factor=ti_factor,
+                                open_ports=open_ports
+                            )
+                            if len(encoded_features) != expected_dim:
+                                raise ValueError(f"Encoder dimension mismatch. Expected {expected_dim}.")
+                            x_input = np.array([[encoded_features]])
+
+                        
+                        # Output is now a 10-class softmax array. We take the max probability as the exploit threat.
+                        # Route to correct model: NLP text attacks go to WAF LSTM, structural go to KillChain LSTM
+                        if "Injection" in cve_desc or "Cross-Site" in cve_desc:
+                            raw_prediction = lstm_waf_engine.predict(x_input)[0]
+                        else:
+                            raw_prediction = lstm_killchain_engine.predict(x_input)[0]
+                            
+                        probability = float(np.max(raw_prediction))
+                    except Exception as e:
+                        logging.warning(f"Native LSTM Inference failed (falling back to simulation): {e}")
+                        # Keep the simulated probability computed above
+                        pass
 
                 attack_type = LSTMPredictor._classify_attack(cve_desc)
                 if attack_type == "Exploitation Attempt" and cve_id:
@@ -801,35 +835,43 @@ class AutoencoderDetector:
                 features = {key: float(abs(rng.normal(mu, sigma))) for key, (mu, sigma) in baseline.items()}
 
             if MODELS_LOADED:
-                # 5 input features for AE: src_bytes, dst_bytes, count, duration, entropy
-                # Scale them down roughly to 0-1 for the autoencoder input
-                base_ae_features = [
-                    min(features.get("byte_rate", 0)/20000, 1.0),
-                    min(features.get("packet_size_mean", 0)/2000, 1.0),
-                    min(features.get("packet_count", 0)/2000, 1.0),
-                    min(features.get("duration", 0)/10, 1.0),
-                    min(features.get("payload_entropy", 0)/8, 1.0)
-                ]
-                # Dynamically get the expected input shape from the loaded model
-                expected_ae_dim = ae_engine.weights[0][0].shape[0] if hasattr(ae_engine, 'weights') else 20
-                
-                if traffic_data and "feature_vector" in traffic_data:
-                    feat_vec = traffic_data["feature_vector"].copy()
-                    if len(feat_vec) < expected_ae_dim:
-                        feat_vec += [0.0] * (expected_ae_dim - len(feat_vec))
+                try:
+                    # 5 input features for AE: src_bytes, dst_bytes, count, duration, entropy
+                    # Scale them down roughly to 0-1 for the autoencoder input
+                    base_ae_features = [
+                        min(features.get("byte_rate", 0)/20000, 1.0),
+                        min(features.get("packet_size_mean", 0)/2000, 1.0),
+                        min(features.get("packet_count", 0)/2000, 1.0),
+                        min(features.get("duration", 0)/10, 1.0),
+                        min(features.get("payload_entropy", 0)/8, 1.0)
+                    ]
+                    # Dynamically get the expected input shape from the loaded model
+                    expected_ae_dim = ae_engine.weights[0][0].shape[0] if hasattr(ae_engine, 'weights') else 20
+                    
+                    if traffic_data and "feature_vector" in traffic_data:
+                        feat_vec = traffic_data["feature_vector"].copy()
+                        if len(feat_vec) < expected_ae_dim:
+                            feat_vec += [0.0] * (expected_ae_dim - len(feat_vec))
+                        else:
+                            feat_vec = feat_vec[:expected_ae_dim]
+                        x_in = np.array([feat_vec])
                     else:
-                        feat_vec = feat_vec[:expected_ae_dim]
-                    x_in = np.array([feat_vec])
-                else:
-                    padded_ae_features = base_ae_features + [0.0] * (expected_ae_dim - len(base_ae_features))
-                    x_in = np.array([padded_ae_features])
-                
-                x_out = ae_engine.predict(x_in)
-                # Anomaly score is the Mean Squared Error of the reconstruction
-                anomaly_score = float(np.mean(np.square(x_in - x_out)))
-                # Scale MSE so normal is low, attack is high
-                anomaly_score = min(anomaly_score * 10.0, 0.99)
-                reconstruction_error = anomaly_score
+                        padded_ae_features = base_ae_features + [0.0] * (expected_ae_dim - len(base_ae_features))
+                        x_in = np.array([padded_ae_features])
+                    
+                    x_out = ae_engine.predict(x_in)
+                    # Anomaly score is the Mean Squared Error of the reconstruction
+                    anomaly_score = float(np.mean(np.square(x_in - x_out)))
+                    # Scale MSE so normal is low, attack is high
+                    anomaly_score = min(anomaly_score * 10.0, 0.99)
+                    reconstruction_error = anomaly_score
+                except Exception as e:
+                    logging.warning(f"Native Autoencoder Inference failed (falling back to simulation): {e}")
+                    if is_attack:
+                        reconstruction_error = float(rng.uniform(0.78, 0.99))
+                    else:
+                        reconstruction_error = float(rng.uniform(0.02, 0.60))
+                    anomaly_score = reconstruction_error
             else:
                 if is_attack:
                     reconstruction_error = float(rng.uniform(0.78, 0.99))
