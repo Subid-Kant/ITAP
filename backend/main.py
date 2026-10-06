@@ -24,11 +24,16 @@ from app.services.monitoring.global_threat_feed import global_threat_feed
 from app.services.monitoring.machine_scanner import machine_scanner
 
 # ── Logging Configuration ──────────────────────────────────────────────────────
+from app.core.logging_filters import install_secret_filter
+
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s | %(name)-28s | %(levelname)-8s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# Attached to the root logger so third-party libraries (aiohttp, httpx, uvicorn
+# access logs) are covered as well as our own loggers.
+install_secret_filter()
 logger = logging.getLogger("itap")
 
 
@@ -105,7 +110,12 @@ app = FastAPI(
     ],
 )
 
-# ── Middleware Stack (order matters — outermost first) ────────────────────────
+# ── Middleware Stack ──────────────────────────────────────────────────────────
+# Starlette's add_middleware() *prepends*: the LAST call is the OUTERMOST layer.
+# So the order below reads inside-out — CORS is added last and therefore wraps
+# everything, including the security headers and the rate limiter. (The previous
+# comment claimed "outermost first", which is the opposite of what happens and
+# invites a future reorder that silently changes which layer sees the request.)
 app.add_middleware(RateLimitMiddleware,
                    max_requests=settings.RATE_LIMIT_REQUESTS,
                    window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS)
@@ -143,6 +153,11 @@ async def validation_exception_handler(request, exc):
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    # While debugging, returning a generic 500 hides the traceback that TestClient
+    # would otherwise raise, which turns a two-minute fix into a log hunt. The
+    # real client-facing behaviour is unchanged outside DEBUG.
+    if settings.DEBUG:
+        raise exc
     return JSONResponse(
         status_code=500,
         content={"detail": "Internal server error. Please check logs."},
@@ -176,8 +191,15 @@ async def websocket_live_feed(websocket: WebSocket):
     """
     Real-time threat event stream via WebSocket.
     Broadcasts new threats, scan completions, and system alerts.
+
+    Requires authentication: the client's first frame must be
+    ``{"type": "auth", "token": "<access token>"}``. Until that frame validates,
+    the socket is only *pending* and receives no broadcasts (see ConnectionManager).
     """
-    await ws_manager.connect(websocket)
+    if not await ws_manager.connect(websocket):
+        return
+    if not await ws_manager.authenticate(websocket):
+        return
     try:
         while True:
             # Keep connection alive — receive heartbeat pings from client
@@ -186,24 +208,54 @@ async def websocket_live_feed(websocket: WebSocket):
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
+    except Exception as exc:
+        logger.warning(f"WebSocket closed after error: {exc}")
+        ws_manager.disconnect(websocket)
 
 
 # ── Frontend SPA Serving ──────────────────────────────────────────────────────
+# backend/main.py -> dirname is `backend/`, dirname again is the repo root. The
+# previous version called dirname() three times, so this resolved to
+# `<parent-of-repo>/frontend/dist`: never present, which silently disabled the SPA
+# branch below (and with it the path-traversal guard that was added to it).
 FRONTEND_BUILD = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    os.path.dirname(os.path.dirname(__file__)),
     "frontend", "dist"
 )
+FRONTEND_ASSETS = os.path.join(FRONTEND_BUILD, "assets")
 
-if os.path.exists(FRONTEND_BUILD):
-    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_BUILD, "assets")), name="assets")
+if os.path.isdir(FRONTEND_BUILD):
+    # Guard the mount too: StaticFiles(directory=...) raises on a missing directory,
+    # which would take the whole app down just because a build has no assets/.
+    if os.path.isdir(FRONTEND_ASSETS):
+        app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_frontend(full_path: str):
-        """Serve React SPA — returns index.html for any non-API route."""
-        file_path = os.path.join(FRONTEND_BUILD, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(FRONTEND_BUILD, "index.html"))
+        """Serve React SPA — returns index.html for any non-API route.
+
+        Security: the request-supplied path is confined to FRONTEND_BUILD.
+        Without this containment, `/%2e%2e%2e%2e%2e%2e/etc/passwd` (or the
+        Windows equivalent) escaped the web root and disclosed any file the
+        server process can read, including backend/.env with live API keys.
+
+        API and WebSocket paths are excluded from the catch-all: otherwise a
+        mistyped `/api/v1/targts` answered 200 with an HTML page instead of 404,
+        which hides real routing mistakes from both callers and tests.
+        """
+        if full_path.startswith(("api/", "ws/")):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+        root = os.path.realpath(FRONTEND_BUILD)
+        candidate = os.path.realpath(os.path.join(root, full_path))
+        try:
+            contained = os.path.commonpath([root, candidate]) == root
+        except ValueError:
+            # Different drives on Windows (e.g. C:\\ vs D:\\) -> not contained.
+            contained = False
+        if contained and candidate != root and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(root, "index.html"))
 else:
     @app.get("/", include_in_schema=False)
     async def root():

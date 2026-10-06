@@ -8,25 +8,97 @@ Seeded for reproducibility. In production, replace simulation with trained model
 """
 import numpy as np
 import hashlib
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import logging
 from pathlib import Path
+
+# ── Native model artifact resolution ─────────────────────────────────────────
+# Real .h5 artifacts are located by trying candidate filenames in priority order,
+# so a renamed training export degrades loudly (is_mocked=True) instead of
+# silently serving fabricated weights. MODEL_STATUS records what actually loaded
+# and is surfaced by /ml/status so mocked inference can never be mistaken for
+# real inference.
+WEIGHTS_DIR = Path(__file__).parent / "weights"
+
+WEIGHT_CANDIDATES = {
+    "lstm_killchain": ("itap_lstm_killchain_v3.h5", "itap_lstm_v3.h5", "itap_lstm_v2.h5"),
+    "lstm_waf": ("itap_lstm_waf_payloads_v3.h5", "itap_lstm_waf_v3.h5"),
+    "autoencoder": ("itap_autoencoder_network_v3.h5", "itap_autoencoder_v3.h5", "itap_autoencoder_v2.h5"),
+}
+
+# role -> {"artifact": str|None, "real_weights": bool}
+MODEL_STATUS: Dict[str, Any] = {}
+
+
+def _resolve_weight_path(role: str) -> Optional[Path]:
+    """Return the first candidate artifact that actually exists on disk."""
+    for name in WEIGHT_CANDIDATES.get(role, ()):
+        path = WEIGHTS_DIR / name
+        if path.is_file():
+            return path
+    return None
+
+
+def get_model_status() -> Dict[str, Any]:
+    """Machine-readable summary of which models use real trained weights."""
+    return {
+        "models_loaded": MODELS_LOADED,
+        "inference_is_real": MODELS_LOADED,
+        "engines": MODEL_STATUS,
+        "feature_encoder": {"version": FeatureEncoder.VERSION, "lstm_dim": FeatureEncoder.LSTM_DIM, "ae_dim": FeatureEncoder.AE_DIM},
+    }
+
 
 # Attempt to load the native numpy ML models
 try:
     from app.services.ml.native_inference import NativeLSTM, NativeAutoencoder
     WEIGHTS_DIR = Path(__file__).parent / "weights"
     
-    # 3-Model Distributed Architecture
-    lstm_killchain_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_killchain_v3.h5"))
-    lstm_waf_engine = NativeLSTM(str(WEIGHTS_DIR / "itap_lstm_waf_payloads_v3.h5"))
-    ae_engine = NativeAutoencoder(str(WEIGHTS_DIR / "itap_autoencoder_network_v3.h5"))
+    # 3-Model Distributed Architecture — each engine resolves a real artifact
+    # when one exists, otherwise native_inference fabricates weights and flags
+    # the engine with is_mocked=True.
+    def _load_engine(role: str, cls: type):
+        path = _resolve_weight_path(role)
+        # When nothing real is found, pass the canonical name so the underlying
+        # loader logs a precise "weights not found at <path>" warning.
+        engine = cls(str(path) if path else str(WEIGHTS_DIR / WEIGHT_CANDIDATES[role][0]))
+        MODEL_STATUS[role] = {
+            "artifact": path.name if path else None,
+            "real_weights": not getattr(engine, "is_mocked", True),
+        }
+        return engine
+
+    lstm_killchain_engine = _load_engine("lstm_killchain", NativeLSTM)
+    lstm_waf_engine = _load_engine("lstm_waf", NativeLSTM)
+    ae_engine = _load_engine("autoencoder", NativeAutoencoder)
     
-    MODELS_LOADED = True
-    print("[INFO] Successfully loaded ITAP Native ML Models (Distributed Architecture)")
+    # Only claim a healthy ML stack when EVERY engine holds real trained
+    # weights. Fabricated fallback weights must never report as "loaded".
+    MODELS_LOADED = bool(MODEL_STATUS) and all(
+        s.get("real_weights") for s in MODEL_STATUS.values()
+    )
+
+    if MODELS_LOADED:
+        print("[INFO] Successfully loaded ITAP Native ML Models (Distributed Architecture)")
+        for _role, _st in MODEL_STATUS.items():
+            print(f"[INFO]   {_role}: {_st['artifact']}")
+    else:
+        _mocked = sorted(r for r, s in MODEL_STATUS.items() if not s.get("real_weights"))
+        print(
+            f"[WARNING] ITAP ML engines running on FABRICATED weights: {', '.join(_mocked)}. "
+            "Predictions from these engines are DEMO/VALIDATION ONLY and must not be "
+            "reported as real inference. Train/export the missing .h5 artifacts to fix."
+        )
+        logging.getLogger("itap.ml").warning(
+            "ML inference is NOT real for: %s (MODELS_LOADED=False)", ", ".join(_mocked)
+        )
 except Exception as e:
     MODELS_LOADED = False
+    MODEL_STATUS["load_error"] = f"{type(e).__name__}: {e}"
+    # Keep the names defined so downstream hasattr guards stay safe.
+    lstm_killchain_engine = lstm_waf_engine = ae_engine = None
     print(f"[WARNING] Could not load ML models, using simulation fallback: {e}")
 
 # Global seeded RNG for reproducibility
@@ -48,15 +120,21 @@ class FeatureEncoder:
     AE_DIM = 20
 
     @classmethod
-    def encode_lstm(cls, cvss: float, env_risk: float, recency: float, ti_factor: float, open_ports: int) -> list:
-        # Build exact 196-dim vector to match LSTM v3 contract
-        vec = [0.0] * cls.LSTM_DIM
+    def encode_lstm(cls, cvss: float, env_risk: float, recency: float, ti_factor: float,
+                    open_ports: int, dim: Optional[int] = None) -> list:
+        # Build the exact-length vector demanded by the *loaded* model. Passing
+        # `dim` prevents the dimension guard at the inference site from always
+        # tripping (and silently falling back to simulation) when the artifact
+        # has a different input width than LSTM_DIM.
+        width = int(dim) if dim else cls.LSTM_DIM
+        vec = [0.0] * width
         vec[0] = min(cvss / 10.0, 1.0)
         vec[1] = env_risk
         vec[2] = recency
         vec[3] = ti_factor
-        vec[4] = min(open_ports / 65535.0, 1.0)
-        # Remaining 191 features are explicitly 0.0 (reserved for future schema expansions)
+        if width > 4:
+            vec[4] = min(open_ports / 65535.0, 1.0)
+        # Remaining features are explicitly 0.0 (reserved for future schema expansions)
         return vec
 
 
@@ -603,12 +681,23 @@ class LSTMPredictor:
                 # Default simulation probability
                 probability = min(max(cvss_factor + env_factor + recency_factor + ti_factor + domain_noise, 0.05), 0.98)
 
-                if MODELS_LOADED:
+                # Gate on THIS engine actually holding trained weights rather than
+                # the global MODELS_LOADED health flag: a missing WAF artifact must
+                # not switch off inference for the killchain model that did load.
+                if getattr(lstm_killchain_engine, "is_mocked", True) is False:
                     try:
-                        # Pass features into actual LSTM model
-                        # Dynamically get the expected input shape from the loaded model
-                        expected_dim = lstm_killchain_engine.lstm1[0].shape[0] if hasattr(lstm_killchain_engine, 'lstm1') else 20
-                        
+                        # Route first, then read the input width off the chosen
+                        # artifact — each .h5 declares its own feature count.
+                        # NLP text attacks go to the WAF LSTM, structural ones to the
+                        # KillChain LSTM. The WAF LSTM is only used when it holds real
+                        # weights, since real killchain weights beat fabricated ones.
+                        use_waf = (
+                            ("Injection" in cve_desc or "Cross-Site" in cve_desc)
+                            and getattr(lstm_waf_engine, "is_mocked", True) is False
+                        )
+                        engine = lstm_waf_engine if use_waf else lstm_killchain_engine
+                        expected_dim = engine.lstm1[0].shape[0]
+
                         if "feature_vector" in osint_data:
                             # Use existing vector but strictly validate length
                             feat_vec = osint_data["feature_vector"].copy()
@@ -622,21 +711,16 @@ class LSTMPredictor:
                                 env_risk=env_risk,
                                 recency=0.15,
                                 ti_factor=ti_factor,
-                                open_ports=open_ports
+                                open_ports=open_ports,
+                                dim=expected_dim,
                             )
                             if len(encoded_features) != expected_dim:
                                 raise ValueError(f"Encoder dimension mismatch. Expected {expected_dim}.")
                             x_input = np.array([[encoded_features]])
 
-                        
-                        # Output is now a 10-class softmax array. We take the max probability as the exploit threat.
-                        # Route to correct model: NLP text attacks go to WAF LSTM, structural go to KillChain LSTM
-                        if "Injection" in cve_desc or "Cross-Site" in cve_desc:
-                            raw_prediction = lstm_waf_engine.predict(x_input)[0]
-                        else:
-                            raw_prediction = lstm_killchain_engine.predict(x_input)[0]
-                            
-                        probability = float(np.max(raw_prediction))
+                        # Max class probability over the model's attack classes is
+                        # used as the exploit likelihood.
+                        probability = float(np.max(engine.predict(x_input)[0]))
                     except Exception as e:
                         logging.warning(f"Native LSTM Inference failed (falling back to simulation): {e}")
                         # Keep the simulated probability computed above
@@ -791,6 +875,9 @@ class ThreatTrendAnalyzer:
 
 
 class AutoencoderDetector:
+    # Distinguishes consecutive simulated scans; see the seed comment in
+    # detect_anomalies.
+    _simulation_counter = 0
     """
     Autoencoder-based anomaly detection v2.0.
     Builds behavioural fingerprints using numpy statistical modeling.
@@ -818,9 +905,21 @@ class AutoencoderDetector:
         """
         Analyze network traffic for anomalies using autoencoder simulation.
         Uses Mahalanobis-distance-inspired scoring for realism.
+
+        Every returned record carries its provenance (``is_simulated``,
+        ``synthetic_flow_inventory``, ``evidence_source``): the flow inventory itself
+        is *always* generated, and the score is generated too whenever the autoencoder
+        artifact is missing or inference fails. Callers must not present these as
+        observed findings without checking those flags.
         """
         anomalies = []
-        rng = np.random.default_rng(seed=int(datetime.utcnow().timestamp()) % 10000)
+        # The old seed was `int(timestamp) % 10000` — only 10 000 possible states for
+        # the whole process, so two calls within the same second returned
+        # byte-identical "anomalies" (a refreshed dashboard showed the same fake
+        # attackers). Mix a process-wide counter with nanosecond time instead.
+        AutoencoderDetector._simulation_counter += 1
+        seed = (time.time_ns() ^ (AutoencoderDetector._simulation_counter << 17)) % (2 ** 32)
+        rng = np.random.default_rng(seed)
 
         num_flows = int(rng.integers(60, 180))
         baseline = AutoencoderDetector.NORMAL_BASELINE
@@ -834,7 +933,11 @@ class AutoencoderDetector:
             else:
                 features = {key: float(abs(rng.normal(mu, sigma))) for key, (mu, sigma) in baseline.items()}
 
-            if MODELS_LOADED:
+            # Gate on the autoencoder itself rather than the global MODELS_LOADED
+            # health flag, so a missing artifact for a *different* engine cannot
+            # switch off real anomaly detection (and vice versa).
+            used_real_inference = False
+            if getattr(ae_engine, "is_mocked", True) is False:
                 try:
                     # 5 input features for AE: src_bytes, dst_bytes, count, duration, entropy
                     # Scale them down roughly to 0-1 for the autoencoder input
@@ -865,6 +968,7 @@ class AutoencoderDetector:
                     # Scale MSE so normal is low, attack is high
                     anomaly_score = min(anomaly_score * 10.0, 0.99)
                     reconstruction_error = anomaly_score
+                    used_real_inference = True
                 except Exception as e:
                     logging.warning(f"Native Autoencoder Inference failed (falling back to simulation): {e}")
                     if is_attack:
@@ -895,6 +999,12 @@ class AutoencoderDetector:
                     "protocol": ["TCP", "UDP", "ICMP"][int(rng.integers(0, 3))],
                     "confidence": "high" if anomaly_score > 0.90 else "medium",
                     "detected_at": datetime.utcnow().isoformat(),
+                    # Provenance, so no caller can present this as an observed
+                    # finding by accident: the flow inventory is generated in every
+                    # case, and the score too whenever inference did not run.
+                    "is_simulated": not used_real_inference,
+                    "synthetic_flow_inventory": True,
+                    "evidence_source": "autoencoder" if used_real_inference else "simulation",
                 })
 
         return sorted(anomalies, key=lambda x: x["anomaly_score"], reverse=True)

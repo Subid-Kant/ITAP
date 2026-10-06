@@ -28,8 +28,14 @@ class ShodanService:
         
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{ShodanService.BASE_URL}/shodan/host/{ip}?key={settings.SHODAN_API_KEY}"
-                async with session.get(url) as resp:
+                # The key travels as a request *parameter* rather than inside an
+                # interpolated URL string, so it cannot be captured by an exception
+                # message, a repr(), or any log line that prints the URL. Shodan's
+                # API requires the key as a query parameter, so this plus the
+                # scrubbing filter in app.core.logging_filters is the strongest
+                # available handling.
+                url = f"{ShodanService.BASE_URL}/shodan/host/{ip}"
+                async with session.get(url, params={"key": settings.SHODAN_API_KEY}) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         return {

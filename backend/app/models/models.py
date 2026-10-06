@@ -5,7 +5,7 @@ scan results, incidents, alerts, and playbooks.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, Boolean, Text, DateTime, JSON, ForeignKey, Enum as SAEnum
+from sqlalchemy import Column, String, Float, Integer, Boolean, Text, DateTime, JSON, ForeignKey, Enum as SAEnum, Index
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 import enum
@@ -60,6 +60,9 @@ class Target(Base):
 class Scan(Base):
     """OSINT scan results for a target."""
     __tablename__ = "scans"
+    # (target_id, started_at) backs the "latest scan for this target" lookup that
+    # /scan performs on every run, plus /history/target/{id}.
+    __table_args__ = (Index("ix_scans_target_started", "target_id", "started_at"),)
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     target_id = Column(String, ForeignKey("targets.id"), nullable=False)
@@ -134,6 +137,13 @@ class AnomalyDetection(Base):
 class Threat(Base):
     """Detected threat with severity and MITRE ATT&CK mapping."""
     __tablename__ = "threats"
+    # Every hot read filters/sorts on these columns; without them each dashboard
+    # poll did a full table scan on a table that grows with every scan.
+    __table_args__ = (
+        Index("ix_threats_detected_at", "detected_at"),
+        Index("ix_threats_archived_resolved", "is_archived", "is_resolved"),
+        Index("ix_threats_target_id", "target_id"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     target_id = Column(String, ForeignKey("targets.id"), nullable=True)
@@ -199,6 +209,10 @@ class Threat(Base):
 class Incident(Base):
     """Incident with linked threat, playbook, and remediation tracking."""
     __tablename__ = "incidents"
+    __table_args__ = (
+        Index("ix_incidents_detected_at", "detected_at"),
+        Index("ix_incidents_status", "status"),
+    )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     target_id = Column(String, ForeignKey("targets.id"), nullable=True)
@@ -260,3 +274,59 @@ class DashboardMetric(Base):
     metric_data = Column(JSON, nullable=True)
     period = Column(String(20), default="daily")  # hourly, daily, weekly
     computed_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────
+# Layer 6 — Platform audit trail & response state
+# ─────────────────────────────────────────────
+
+class AuditLog(Base):
+    """Append-only record of privileged actions performed on the platform itself.
+
+    RemediationLog only covers incident remediation. Everything that actually
+    changes the security posture of ITAP — blocking an IP, wiping history, starting
+    a new session, deleting a target, failed logins — previously lived in nothing
+    but a logger line, so there was no way to answer "who did this and from where"
+    after a restart. Rows are written with ``app.services.audit_service.record_audit``
+    and are never updated or deleted by the API.
+    """
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("ix_audit_created_at", "created_at"),
+        Index("ix_audit_actor", "actor"),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    actor = Column(String(100), nullable=False, default="anonymous")   # username or "anonymous"
+    actor_role = Column(String(50), nullable=True)
+    action = Column(String(100), nullable=False)         # e.g. "ip.block", "auth.login.failure"
+    resource_type = Column(String(50), nullable=True)    # "blocked_ip", "target", "history", ...
+    resource_id = Column(String(100), nullable=True)
+    outcome = Column(String(20), default="success")      # success | failure | denied
+    detail = Column(Text, nullable=True)                 # human-readable, never secrets
+    ip_address = Column(String(45), nullable=True)
+    request_id = Column(String(50), nullable=True)       # ties the row to X-Request-ID logs
+    before_state = Column(JSON, nullable=True)           # for mutations: old -> new
+    after_state = Column(JSON, nullable=True)
+
+
+class BlockedIP(Base):
+    """Firewall block rules issued from the SOAR console.
+
+    These used to live in a module-level dict, so a restart silently emptied the
+    "firewall" while the UI kept showing whatever had been cached — an operator
+    could believe a hostile IP was still being dropped when it was not.
+    """
+    __tablename__ = "blocked_ips"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    ip_address = Column(String(45), nullable=False, unique=True, index=True)
+    rule_id = Column(String(50), nullable=False, unique=True)
+    reason = Column(String(500), nullable=True)
+    blocked_by = Column(String(100), nullable=False, default="admin")
+    blocked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    released_at = Column(DateTime, nullable=True)   # set on unblock; row kept for the audit trail
+    status = Column(String(20), default="active", nullable=False)
+    threat_id = Column(String, ForeignKey("threats.id"), nullable=True)
+

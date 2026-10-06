@@ -10,23 +10,15 @@ export default function SettingsView() {
   const [activeTab, setActiveTab] = useState('appearance');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Local state for forms before saving (if we wanted a "Save" button)
-  // For Appearance, we apply instantly. For keys, maybe we use a save button.
-  const [localKeys, setLocalKeys] = useState({
-    shodanKey: settings.shodanKey,
-    virusTotalKey: settings.virusTotalKey,
-    alienVaultKey: settings.alienVaultKey,
-  });
-
   const [localScanner, setLocalScanner] = useState({
     scanDepth: settings.scanDepth,
     autoArchiveDays: settings.autoArchiveDays,
   });
 
-  const handleSaveKeys = () => {
-    updateSettings(localKeys);
-    showSaveSuccess();
-  };
+  // NOTE: a `localKeys` state + `handleSaveKeys` lived here, writing the OSINT API
+  // keys into localStorage via updateSettings. They are gone: the backend owns the
+  // keys (backend/.env -> settings), and a browser-side copy was readable by any
+  // script on the page.
 
   const handleSaveScanner = () => {
     updateSettings(localScanner);
@@ -191,46 +183,34 @@ export default function SettingsView() {
                         <Key size={16} /> OSINT API Keys
                       </h3>
                       <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 24 }}>
-                        These keys are required for deep-scanning functionality. Note: Currently stored in LocalStorage for frontend prototype testing.
+                        OSINT keys are configured on the <strong>backend</strong>, in <code>backend/.env</code>.
+                        The browser never holds them.
                       </p>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                        <div className="input-group">
-                          <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500, color: 'var(--text-main)' }}>Shodan API Key</label>
-                          <input
-                            type="password"
-                            value={localKeys.shodanKey}
-                            onChange={e => setLocalKeys(prev => ({ ...prev, shodanKey: e.target.value }))}
-                            placeholder="Enter Shodan Key..."
-                            style={{ width: '100%', padding: '10px 14px', background: 'var(--bg-app)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-sm)', color: 'var(--text-main)', fontFamily: "'JetBrains Mono'" }}
-                          />
+                      <div style={{
+                        padding: '16px 18px',
+                        border: '1px solid var(--border-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--bg-app)',
+                        fontSize: 13,
+                        lineHeight: 1.7,
+                        color: 'var(--text-muted)',
+                      }}>
+                        {/* These fields used to write the keys into localStorage, where any
+                            XSS — or anyone with access to the browser profile — could read
+                            them. The backend already reads them from settings, so the
+                            duplicate, less-protected copy was removed instead of secured. */}
+                        <div style={{ fontFamily: "'JetBrains Mono'", fontSize: 12, color: 'var(--text-main)' }}>
+                          SHODAN_API_KEY=<br />
+                          VIRUSTOTAL_API_KEY=<br />
+                          ALIENVAULT_OTX_KEY=<br />
+                          CENSYS_API_ID / CENSYS_API_SECRET=<br />
+                          NVD_API_KEY=
                         </div>
-                        <div className="input-group">
-                          <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500, color: 'var(--text-main)' }}>VirusTotal API Key</label>
-                          <input
-                            type="password"
-                            value={localKeys.virusTotalKey}
-                            onChange={e => setLocalKeys(prev => ({ ...prev, virusTotalKey: e.target.value }))}
-                            placeholder="Enter VirusTotal Key..."
-                            style={{ width: '100%', padding: '10px 14px', background: 'var(--bg-app)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-sm)', color: 'var(--text-main)', fontFamily: "'JetBrains Mono'" }}
-                          />
+                        <div style={{ marginTop: 12 }}>
+                          They are read once at startup, so a changed key needs a backend
+                          restart to take effect.
                         </div>
-                        <div className="input-group">
-                          <label style={{ display: 'block', marginBottom: 8, fontSize: 13, fontWeight: 500, color: 'var(--text-main)' }}>AlienVault OTX Key</label>
-                          <input
-                            type="password"
-                            value={localKeys.alienVaultKey}
-                            onChange={e => setLocalKeys(prev => ({ ...prev, alienVaultKey: e.target.value }))}
-                            placeholder="Enter AlienVault Key..."
-                            style={{ width: '100%', padding: '10px 14px', background: 'var(--bg-app)', border: '1px solid var(--border-light)', borderRadius: 'var(--radius-sm)', color: 'var(--text-main)', fontFamily: "'JetBrains Mono'" }}
-                          />
-                        </div>
-                      </div>
-
-                      <div style={{ marginTop: 24 }}>
-                        <AnimatedButton onClick={handleSaveKeys} className="primary" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', background: 'var(--accent-blue)', color: '#fff', border: 'none', borderRadius: 'var(--radius-md)', fontWeight: 600 }}>
-                          <Save size={16} /> Save API Keys
-                        </AnimatedButton>
                       </div>
                     </div>
                   </div>

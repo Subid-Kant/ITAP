@@ -31,7 +31,9 @@ export function AuthProvider({ children }) {
       return true;
     } catch (e) {
       const msg = e?.message || '';
-      if (msg.toLowerCase().includes('too many')) {
+      if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
+        setError('Cannot connect to server. Is the backend running?');
+      } else if (msg.toLowerCase().includes('too many')) {
         setError('Too many attempts. Please wait a moment and try again.');
       } else {
         setError('Invalid credentials. Please try again.');

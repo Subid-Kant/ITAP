@@ -1,9 +1,10 @@
 import json
 import hashlib
 import os
+import threading
+import uuid
 import datetime
 import logging
-import asyncio
 from typing import Dict, Any
 
 logger = logging.getLogger("itap.telemetry")
@@ -11,13 +12,23 @@ logger = logging.getLogger("itap.telemetry")
 class TelemetryCollector:
     DATASET_PATH = os.path.join(os.path.dirname(__file__), "../../../data/telemetry_dataset.jsonl")
     HISTORY_PATH = os.path.join(os.path.dirname(__file__), "../../../data/telemetry_history.json")
-    _lock = None
 
-    @classmethod
-    def get_lock(cls):
-        if cls._lock is None:
-            cls._lock = asyncio.Lock()
-        return cls._lock
+    # In-process mutual exclusion for the read-compare-write cycle below.
+    #
+    # threading, not asyncio: writers reach log_scan from more than one event loop —
+    # the API loop, background monitors, worker threads that call asyncio.run, and the
+    # dataset scripts in ai_training/. An asyncio.Lock only serialises tasks inside the
+    # one loop that first contended it, and once contended it *raises* RuntimeError for
+    # every other loop. It therefore neither serialised nor protected cross-loop
+    # writers. A threading lock covers every thread and loop in the process, and since
+    # the critical section below performs no await, holding it can never stall the
+    # event loop for longer than one small file write.
+    #
+    # INVARIANT: do not await inside this lock.
+    #
+    # Limitation: this is per-process. Multiple uvicorn workers sharing one dataset
+    # file still need OS-level file locking (portalocker/fcntl) to be fully safe.
+    _write_lock = threading.RLock()
 
     @classmethod
     def ensure_directories(cls):
@@ -102,10 +113,14 @@ class TelemetryCollector:
         cls.ensure_directories()
         
         fingerprint = cls.generate_fingerprint(domain, osint_data)
-        event_id = f"evt-{hashlib.md5((domain + str(datetime.datetime.utcnow())).encode()).hexdigest()[:8]}"
+        # uuid4 entropy: datetime.utcnow() only advances in coarse ticks on
+        # Windows, so bursts of scans inside one tick used to mint identical
+        # event_ids — duplicate keys in the very dataset models train on.
+        event_id = f"evt-{hashlib.md5((domain + str(datetime.datetime.utcnow()) + uuid.uuid4().hex).encode()).hexdigest()[:8]}"
         
-        # Acquire transaction lock for the entire read-compare-write cycle
-        async with cls.get_lock():
+        # Serialise the whole read-compare-write cycle: two scans that both read
+        # "no previous fingerprint" before either writes would each claim to be new.
+        with cls._write_lock:
             last_fingerprint = cls._get_last_fingerprint_unlocked(domain)
             
             training_eligible = True

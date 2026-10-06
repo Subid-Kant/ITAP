@@ -7,12 +7,13 @@ const DEFAULT_SETTINGS = {
   density: 'comfortable', // 'comfortable', 'compact'
   animations: true, // boolean
   defaultLandingPage: 'dashboard',
-  
-  // OSINT Keys
-  shodanKey: '',
-  virusTotalKey: '',
-  alienVaultKey: '',
-  
+
+  // NOTE: shodanKey / virusTotalKey / alienVaultKey used to live here and were
+  // persisted to localStorage by the provider below, putting live OSINT API keys
+  // in a place any script on the page (or anyone with the browser profile) could
+  // read. The backend reads them from backend/.env, so the client-side copies were
+  // deleted rather than "secured".
+
   // Scanner Config
   scanDepth: 'normal', // 'fast', 'normal', 'deep'
   autoArchiveDays: 30,

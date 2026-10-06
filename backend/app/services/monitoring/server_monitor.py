@@ -8,6 +8,7 @@ import psutil
 import socket
 import logging
 from datetime import datetime
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -24,22 +25,35 @@ class ServerMonitor:
         self.disk_threshold = 85.0
         self.last_alerts = {}  # Prevent alert spam
         self.startup_logged = False
+        # Held so stop() can cancel it; a discarded task can be garbage-collected
+        # mid-flight and stop() alone never interrupted the sleep below.
+        self._task: Optional[asyncio.Task] = None
+        self._stop_evt = asyncio.Event()
 
     async def start(self):
         self.is_running = True
+        self._stop_evt.clear()
+        self._task = asyncio.create_task(self._monitor_loop(), name="server_monitor")
         logger.info("Started real-time server monitoring (psutil)")
-        asyncio.create_task(self._monitor_loop())
 
     async def stop(self):
         self.is_running = False
+        self._stop_evt.set()
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
         logger.info("Stopped server monitoring")
 
-    async def get_current_stats(self) -> dict:
-        """Get instant snapshot of server stats for the dashboard."""
+    def _collect_stats_sync(self) -> dict:
+        """Blocking psutil/socket collection — never call this on the event loop."""
         cpu = psutil.cpu_percent(interval=0.1)
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
-        
+
         # Get active network connections
         conns = []
         try:
@@ -50,7 +64,7 @@ class ServerMonitor:
                     conns.append({"local": laddr, "remote": raddr, "pid": c.pid})
         except psutil.AccessDenied:
             pass # Requires admin on Windows for all connections
-            
+
         return {
             "cpu_percent": cpu,
             "memory_percent": mem.percent,
@@ -63,19 +77,37 @@ class ServerMonitor:
             "timestamp": datetime.utcnow().isoformat()
         }
 
+    async def get_current_stats(self) -> dict:
+        """Get instant snapshot of server stats for the dashboard.
+
+        The collection is offloaded to a worker thread: cpu_percent(interval=0.1)
+        hard-blocks for ~100 ms and net_connections() can take seconds on Windows.
+        Inline, this ran in the request path (GET /monitoring/server-status) every
+        15 s and stalled every other request, WebSocket broadcast and scan.
+        """
+        return await asyncio.to_thread(self._collect_stats_sync)
+
     async def _monitor_loop(self):
         while self.is_running:
             try:
                 stats = await self.get_current_stats()
-                
+
                 # Log a startup system event on first loop (disabled to prevent clutter)
                 if not self.startup_logged:
                     self.startup_logged = True
-                    
+
                 await self._evaluate_thresholds(stats)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error in server monitor loop: {e}")
-            await asyncio.sleep(15) # Check every 15 seconds
+            # Check every 15s, but wake immediately when stop() is called.
+            try:
+                await asyncio.wait_for(self._stop_evt.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+            else:
+                break
 
     async def _evaluate_thresholds(self, stats: dict):
         alerts = []

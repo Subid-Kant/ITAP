@@ -14,11 +14,14 @@ import platform
 import socket
 import os
 import re
+import ipaddress
 from datetime import datetime
 from typing import Optional
 
 import aiohttp
 import psutil
+
+from app.core.config import settings
 
 logger = logging.getLogger("itap.scanner.machine")
 
@@ -53,17 +56,33 @@ SAFE_ORG_PREFIXES = [
     "zoom", "dropbox", "salesforce", "oracle", "ibm",
 ]
 
-# ── Private/loopback CIDR ranges (skip geolocation) ──────────────────────────
-PRIVATE_PREFIXES = (
-    "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
-    "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
-    "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-    "192.168.", "127.", "::1", "fe80:", "fc", "fd",
-)
-
-
+# ── Addresses that must never be sent to a third party ───────────────────────
+# This replaced a hand-maintained tuple of string prefixes, which missed whole
+# ranges (CGNAT 100.64/10, link-local 169.254/16, unique-local fc00::/7, multicast,
+# reserved). ipaddress classifies the full address space instead.
 def _is_private(ip: str) -> bool:
-    return ip.startswith(PRIVATE_PREFIXES)
+    """True for any address that must not leave the host (fail closed).
+
+    The decision is ``not is_global``: only globally routable addresses are worth
+    geolocating, so anything the IANA special-purpose registries reserve — CGNAT
+    (100.64/10), link-local, loopback, multicast, benchmark ranges — is redacted.
+    Python 3.13+ narrowed ``is_private`` so that some of those ranges are no longer
+    "private" (CGNAT is neither private nor global), which is precisely why the
+    explicit checks are kept alongside it rather than relying on one flag.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return True   # unparseable -> redact rather than forward
+    return (
+        not addr.is_global
+        or addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
 
 
 def _classify_connection(geo: dict, port: int, org: str) -> str:
@@ -106,30 +125,70 @@ class MachineScannerService:
     Results stored in-memory and served via API endpoint.
     """
 
-    SCAN_INTERVAL = 60  # seconds between rescans
+    SCAN_INTERVAL = 60  # seconds between rescans (overridable via settings)
     IPINFO_URL = "https://ipinfo.io/json"
-    IP_API_BATCH_URL = "http://ip-api.com/batch"
-    IP_API_SINGLE_URL = "http://ip-api.com/json/{ip}"
+    # Provenance label for every value derived from a third-party service, so the
+    # UI/API can say where a "MALICIOUS" classification actually came from.
+    GEO_SOURCE_IPINFO = "ipinfo.io"
+    GEO_SOURCE_IP_API = "ip-api.com"
 
     def __init__(self):
         self.is_running = False
         self._result: Optional[dict] = None
         self._lock = asyncio.Lock()
+        # Held so stop() can cancel the loop; a discarded task can be
+        # garbage-collected mid-flight.
+        self._task: Optional[asyncio.Task] = None
+        self._stop_evt = asyncio.Event()
+        # Base URL is configurable so an organisation can point it at an HTTPS
+        # endpoint; ip-api's free tier is HTTP-only, hence the default.
+        base = settings.GEOLOCATION_API_BASE.rstrip("/")
+        self.ip_api_base_url = base
+        self.ip_api_batch_url = f"{base}/batch"
+        self.ip_api_single_url = f"{base}/json/"
+
+    @property
+    def scan_interval(self) -> int:
+        return max(int(settings.MACHINE_SCAN_INTERVAL_SECONDS), 15)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def start(self):
         """Start the scanner — runs an immediate scan then continues periodically."""
+        if not settings.MACHINE_SCAN_ENABLED:
+            logger.info(
+                "Machine Scanner DISABLED (MACHINE_SCAN_ENABLED=false). It reports this "
+                "host's public IP and every remote endpoint it talks to to a "
+                "third-party geolocation service; enable it explicitly if wanted."
+            )
+            return
         self.is_running = True
+        self._stop_evt.clear()
         logger.info("Machine Scanner: starting initial host analysis…")
-        # Fire immediately (don't await — let startup continue)
-        asyncio.create_task(self._scan_loop())
+        self._task = asyncio.create_task(self._scan_loop(), name="machine_scanner")
 
     async def stop(self):
         self.is_running = False
+        self._stop_evt.set()
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
 
     async def get_result(self) -> dict:
         """Return the latest scan result (waits up to 10 s if still scanning)."""
+        if not settings.MACHINE_SCAN_ENABLED:
+            # Say so explicitly rather than returning an empty-looking scan that a
+            # dashboard would render as "no threats found".
+            return {
+                "enabled": False,
+                "message": "Machine scanning is disabled (MACHINE_SCAN_ENABLED=false).",
+                "connections": [],
+                "host": {},
+            }
         for _ in range(20):
             async with self._lock:
                 if self._result is not None:
@@ -150,9 +209,17 @@ class MachineScannerService:
                     f"connections={len(result['connections'])} "
                     f"threats={result['threat_count']}"
                 )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error(f"Machine scan failed: {exc}", exc_info=True)
-            await asyncio.sleep(self.SCAN_INTERVAL)
+            # Wait out the interval, but wake immediately when stop() is called.
+            try:
+                await asyncio.wait_for(self._stop_evt.wait(), timeout=self.scan_interval)
+            except asyncio.TimeoutError:
+                pass
+            else:
+                break
 
     async def _run_scan(self) -> dict:
         # 1. Get host public IP + geo
@@ -163,7 +230,9 @@ class MachineScannerService:
             None, self._get_raw_connections
         )
 
-        # 3. Deduplicate remote IPs (skip private)
+        # 3. Deduplicate remote IPs. _is_private() now fails closed, so anything
+        #    that cannot be parsed as a public address is redacted before it can
+        #    reach a third-party service.
         remote_ips = list({c["remote_ip"] for c in raw_conns if not _is_private(c["remote_ip"])})
 
         # 4. Bulk geolocate remote IPs
@@ -235,6 +304,11 @@ class MachineScannerService:
             "total_connections": len(connections),
             "scan_time": datetime.utcnow().isoformat(),
             "top_threat_country": self._top_country(malicious + suspicious),
+            # Provenance/limits, so a consumer can tell what these numbers are:
+            # third-party geolocation plus local heuristics, on public endpoints only.
+            "geo_source": host_geo.get("geo_source", "unavailable"),
+            "classification_basis": "third-party geolocation + local port/org heuristics",
+            "internal_addresses_redacted": True,
         }
 
     # ── Helpers ────────────────────────────────────────────────────────────────
@@ -243,11 +317,12 @@ class MachineScannerService:
         """Detect public IP and geolocate via ipinfo.io (free, no key)."""
         try:
             async with aiohttp.ClientSession() as s:
+                # Certificate verification stays on: this is the host's own
+                # identity being resolved, and ssl=False made it spoofable.
                 async with s.get(
                     self.IPINFO_URL,
                     timeout=aiohttp.ClientTimeout(total=8),
                     headers={"Accept": "application/json"},
-                    ssl=False,
                 ) as r:
                     if r.status == 200:
                         data = await r.json(content_type=None)
@@ -263,16 +338,17 @@ class MachineScannerService:
                             "org": data.get("org", "Unknown"),
                             "timezone": data.get("timezone", "UTC"),
                             "postal": data.get("postal", ""),
+                            "geo_source": self.GEO_SOURCE_IPINFO,
                         }
         except Exception as e:
             logger.warning(f"ipinfo.io failed ({e}), falling back to ip-api…")
-        # Fallback: ip-api single endpoint
+        # Fallback: ip-api single endpoint (base URL from settings)
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(
-                    "http://ip-api.com/json/?fields=status,message,country,countryCode,regionName,city,lat,lon,isp,org,as,query",
+                    self.ip_api_single_url
+                    + "?fields=status,message,country,countryCode,regionName,city,lat,lon,isp,org,as,query",
                     timeout=aiohttp.ClientTimeout(total=8),
-                    ssl=False,
                 ) as r:
                     if r.status == 200:
                         data = await r.json(content_type=None)
@@ -287,10 +363,16 @@ class MachineScannerService:
                                 "org": data.get("org", data.get("isp", "Unknown")),
                                 "timezone": data.get("timezone", "UTC"),
                                 "postal": "",
+                                "geo_source": self.GEO_SOURCE_IP_API,
                             }
         except Exception as e2:
             logger.error(f"ip-api fallback also failed: {e2}")
-        return {"ip": "Unknown", "city": "Unknown", "region": "", "country": "Unknown", "lat": 0.0, "lon": 0.0, "org": "Unknown", "timezone": "UTC"}
+        # No third-party answer: report that plainly instead of posing as located.
+        return {
+            "ip": "Unknown", "city": "Unknown", "region": "", "country": "Unknown",
+            "lat": 0.0, "lon": 0.0, "org": "Unknown", "timezone": "UTC",
+            "geo_source": "unavailable",
+        }
 
     def _get_raw_connections(self) -> list:
         """Enumerate all ESTABLISHED TCP connections via psutil, with lsof fallback on macOS."""
@@ -396,7 +478,7 @@ class MachineScannerService:
                     payload = [{"query": ip, "fields": fields} for ip in batch]
                     try:
                         async with session.post(
-                            self.IP_API_BATCH_URL,
+                            self.ip_api_batch_url,
                             json=payload,
                             timeout=aiohttp.ClientTimeout(total=12),
                         ) as r:
@@ -404,6 +486,10 @@ class MachineScannerService:
                                 data = await r.json(content_type=None)
                                 for entry in data:
                                     if entry.get("status") == "success":
+                                        # Tag provenance: everything downstream
+                                        # (classification, severity) is derived
+                                        # from this third-party response.
+                                        entry["geo_source"] = self.GEO_SOURCE_IP_API
                                         result[entry["query"]] = entry
                     except Exception as e:
                         logger.warning(f"Batch geo error for chunk {i}: {e}")

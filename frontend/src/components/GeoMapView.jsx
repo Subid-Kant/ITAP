@@ -40,7 +40,7 @@ const createDotIcon = (color, isCritical) => {
     className: 'custom-leaflet-icon',
     html: `
       <div style="position: relative; width: 14px; height: 14px; transform: translate(-50%, -50%);">
-        <div style="position: absolute; inset: -4px; border-radius: 50%; background: ${color}; opacity: 0.3; animation: map-pulse 2s ease infinite;"></div>
+        <div style="position: absolute; inset: -4px; border-radius: 50%; background: ${color}; opacity: 0.3; animation: map-dot-pulse 2s ease infinite;"></div>
         <div style="position: absolute; inset: 0; border-radius: 50%; background: ${color}; border: 1.5px solid #060910;"></div>
       </div>
     `,
@@ -53,7 +53,7 @@ const createHostIcon = () => {
     className: 'custom-leaflet-icon',
     html: `
       <div style="position: relative; width: 20px; height: 20px; transform: translate(-50%, -50%);">
-        <div style="position: absolute; inset: -10px; border-radius: 50%; border: 1px solid #378ADD; opacity: 0.3; animation: map-pulse 2.5s ease infinite;"></div>
+        <div style="position: absolute; inset: -10px; border-radius: 50%; border: 1px solid #378ADD; opacity: 0.3; animation: map-dot-pulse 2.5s ease infinite;"></div>
         <div style="position: absolute; inset: -5px; border-radius: 50%; border: 1.5px solid #378ADD; opacity: 0.5;"></div>
         <div style="position: absolute; top: 50%; left: -8px; width: 8px; height: 1.5px; background: #378ADD;"></div>
         <div style="position: absolute; top: 50%; right: -8px; width: 8px; height: 1.5px; background: #378ADD;"></div>
@@ -430,7 +430,7 @@ export default function GeoMapView() {
             >
               <MapUpdater center={initialCenter} zoom={viewMode === 'machine' ? 3 : 2} />
               
-              {/* CartoDB Dark Matter Base Map (No API Key Required) */}
+              {/* CartoDB Dark Matter Base Map */}
               <TileLayer
                 url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
@@ -674,7 +674,7 @@ export default function GeoMapView() {
       {/* Inline animation keyframes */}
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes map-pulse {
+        @keyframes map-dot-pulse {
           0% { transform: scale(0.5); opacity: 1; box-shadow: 0 0 0 0 rgba(255, 59, 92, 0.7); }
           50% { transform: scale(1.5); opacity: 0.5; box-shadow: 0 0 10px 5px rgba(255, 59, 92, 0.2); }
           100% { transform: scale(2.5); opacity: 0; box-shadow: 0 0 0 0 rgba(255, 59, 92, 0); }

@@ -3,7 +3,7 @@ ITAP v2.0 — API Routes
 All REST API endpoints organized by layer.
 Includes JWT authentication, pagination, WebSocket broadcasts, and PDF report generation.
 """
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,15 +11,18 @@ from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-import uuid
+import asyncio
+import ipaddress
 import io
 import json
 import logging
+import socket
+import uuid
 
 from app.db.database import get_db
 from app.models.models import (
     Target, Scan, OSINTData, ThreatPrediction, AnomalyDetection,
-    Threat, Incident, RemediationLog, DashboardMetric,
+    Threat, Incident, RemediationLog, DashboardMetric, BlockedIP,
     SeverityLevel, ScanStatus as DBScanStatus, IncidentStatus as DBIncidentStatus
 )
 from app.schemas.schemas import (
@@ -30,32 +33,54 @@ from app.schemas.schemas import (
 )
 from app.services.osint import OSINTAggregator, NmapService
 from app.services.ml.llm_service import LocalLLMService
-from app.services.ml.ml_engine import SeverityScorer, LSTMPredictor, AutoencoderDetector
+from app.services.ml.output_validation import validate_predictions, screen_remediation
+from app.services.ml.ml_engine import SeverityScorer, LSTMPredictor, AutoencoderDetector, get_model_status
 from app.services.telemetry_service import TelemetryCollector
-from app.services.threat_intel.threat_intel_service import KillChainEngine, MITREMapper, ThreatDNAFingerprinter, IOCEnricher
-from app.services.response.response_service import PlaybookGenerator
+from app.services.threat_intel.threat_intel_service import (
+    KillChainEngine, MITREMapper, ThreatDNAFingerprinter, IOCEnricher,
+    MITRE_ATTACK_MATRIX, THREAT_ACTOR_DB,
+)
+from app.services.response.response_service import PlaybookGenerator, AutoAlertSystem
 from app.services.monitoring.server_monitor import server_monitor
 from app.services.monitoring.global_threat_feed import global_threat_feed
 from app.services.monitoring.machine_scanner import machine_scanner
-from app.core.security import authenticate_user, create_access_token, create_refresh_token, get_current_user
+from app.core.config import settings
+from app.core.security import (
+    authenticate_user, create_access_token, create_refresh_token, get_current_user,
+    require_roles, decode_token, guard_login, record_login_failure, clear_login_failures,
+    revoke_token, is_token_revoked, BUILTIN_USERS,
+)
 from app.api.routes.ws import manager as ws_manager
+from app.services.audit_service import (
+    record_audit, audit_trail, audit_count, client_ip as _audit_client_ip,
+    request_id_of,
+)
 
 logger = logging.getLogger("itap.api")
 router = APIRouter()
 
 
 # ─── Role-based Access Control ───────────────────────────────────────────────
-
-async def check_admin_role(current_user: dict = Depends(get_current_user)) -> dict:
-    """Dependency that restricts access to admin users only."""
-    if current_user.get("role") not in ("admin",):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return current_user
+# NOTE: this module previously declared TWO different `check_admin_role`
+# functions. Because a route resolves the dependency name at decoration time,
+# the later definition silently won for every route registered after it, making
+# authorization depend on definition order. The single surviving definition
+# lives just below the auth endpoints; prefer `require_roles(...)` from
+# app.core.security when an endpoint admits more than one role.
 
 
 # ─────────────────────────────────────────────
 # Authentication
 # ─────────────────────────────────────────────
+
+def _client_ip(request: Request) -> str:
+    """Best-effort client address, honouring a reverse proxy's X-Forwarded-For.
+
+    Delegates to the audit helper so the throttle key, the audit row and the log
+    line can never disagree about who the caller was.
+    """
+    return _audit_client_ip(request)
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -64,24 +89,66 @@ class LoginRequest(BaseModel):
 class RefreshRequest(BaseModel):
     token: str
 
+class LogoutRequest(BaseModel):
+    # Optional: the access token is read from the Authorization header.
+    refresh_token: Optional[str] = None
+
 @router.post("/auth/login", tags=["Authentication"])
-async def login(req: LoginRequest):
+async def login(
+    req: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Authenticate with username and password via JSON body.
     Returns JWT access token + refresh token.
+
+    Throttled per (username, client IP). RateLimitMiddleware cannot cover this:
+    it bypasses localhost entirely for developer convenience and only caps a whole
+    IP address, so it never protects one account against password guessing.
+
+    Successes, failures and throttles are all written to the audit trail: "has
+    someone been guessing admin's password, from where, and how often" was not
+    answerable from anywhere but the console.
     """
+    throttle_key = f"{req.username}|{_client_ip(request)}"
+    try:
+        guard_login(throttle_key)
+    except HTTPException:
+        await record_audit(
+            db, action="auth.login.throttled", actor=req.username, outcome="denied",
+            detail="Too many failed attempts for this username/client pair",
+            ip_address=_client_ip(request), request_id=request_id_of(request),
+        )
+        raise
+
     user = authenticate_user(req.username, req.password)
     if not user:
+        record_login_failure(throttle_key)
+        await record_audit(
+            db, action="auth.login.failure", actor=req.username, outcome="failure",
+            detail="Invalid credentials", ip_address=_client_ip(request),
+            request_id=request_id_of(request),
+        )
+        # Same message for unknown user and wrong password so the endpoint does not
+        # confirm which usernames exist.
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    clear_login_failures(throttle_key)
     access_token = create_access_token(
         data={"sub": user["username"], "role": user["role"], "name": user["full_name"]}
     )
     refresh_token = create_refresh_token(
         data={"sub": user["username"], "role": user["role"]}
+    )
+    await record_audit(
+        db, action="auth.login", actor=user["username"], actor_role=user["role"],
+        resource_type="session", detail="Credentials accepted",
+        ip_address=_client_ip(request), request_id=request_id_of(request),
     )
     logger.info(f"Login successful: {req.username} (role={user['role']})")
     return {
@@ -93,21 +160,86 @@ async def login(req: LoginRequest):
             "role": user["role"],
             "full_name": user["full_name"],
         },
-        "expires_in_minutes": 480,
+        "expires_in_minutes": settings.ACCESS_TOKEN_EXPIRE_MINUTES,
     }
 
 
 @router.post("/auth/refresh", tags=["Authentication"])
 async def refresh_token(req: RefreshRequest):
-    """Exchange a refresh token for a new access token via JSON body."""
-    from app.core.security import decode_token
+    """Exchange a refresh token for a new access token, rotating the refresh token.
+
+    Previously this handed back only a new access token and let the caller keep
+    reusing the same 7-day refresh token forever, so a single captured refresh
+    token was a permanent credential. Now the presented token is denylisted as it
+    is exchanged, and replaying it is refused.
+    """
     payload = decode_token(req.token)
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if not payload.get("jti") or is_token_revoked(payload):
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
+
+    # Re-read the identity from the user store instead of trusting the claims on a
+    # token that may be weeks old (role changes, deletions).
+    username = payload.get("sub")
+    user = BUILTIN_USERS.get(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    revoke_token(req.token)   # rotation: the presented token dies here
     new_access = create_access_token(
-        data={"sub": payload["sub"], "role": payload.get("role", "viewer")}
+        data={"sub": user["username"], "role": user["role"], "name": user["full_name"]}
     )
-    return {"access_token": new_access, "token_type": "bearer"}
+    new_refresh = create_refresh_token(
+        data={"sub": user["username"], "role": user["role"]}
+    )
+    return {
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+        "token_type": "bearer",
+        "expires_in_minutes": settings.ACCESS_TOKEN_EXPIRE_MINUTES,
+    }
+
+
+@router.post("/auth/logout", tags=["Authentication"])
+async def logout(
+    request: Request,
+    req: Optional[LogoutRequest] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Revoke the caller's access token (from the Authorization header) and, when
+    supplied, the accompanying refresh token.
+
+    Until now logout existed only in the frontend, which deleted localStorage: the
+    tokens themselves stayed valid for their full lifetime for anyone who had
+    captured them.
+    """
+    revoked: List[str] = []
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+        if token:
+            revoke_token(token)
+            revoked.append("access")
+
+    if req and req.refresh_token:
+        try:
+            revoke_token(req.refresh_token)
+            revoked.append("refresh")
+        except HTTPException:
+            # Already expired/invalid — logout must still succeed.
+            logger.info("Logout: supplied refresh token was already invalid")
+
+    await record_audit(
+        db, action="auth.logout", actor=current_user.get("sub"),
+        actor_role=current_user.get("role"), resource_type="session",
+        detail=f"Revoked: {revoked or ['access']}",
+        ip_address=_client_ip(request), request_id=request_id_of(request),
+    )
+    logger.info(f"Logout: {current_user.get('sub')} (revoked: {revoked or 'access'})")
+    return {"status": "logged_out", "revoked": revoked}
 
 
 @router.get("/auth/me", tags=["Authentication"])
@@ -201,17 +333,41 @@ async def get_target(
 async def delete_target(
     target_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_admin_role),
+    current_user: dict = Depends(require_roles("admin", "analyst")),
 ):
     """Delete a target (analyst+ role required)."""
-    if current_user.get("role") not in ("admin", "analyst"):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
     result = await db.execute(select(Target).where(Target.id == target_id))
     target = result.scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
+
+    snapshot = {
+        "domain": target.domain,
+        "ip_address": target.ip_address,
+        "organization": target.organization,
+    }
+
+    # blocked_ips.threat_id is deliberately not an ORM cascade: a firewall rule
+    # must not vanish because someone deleted the target that triggered it. With
+    # SQLite foreign keys enforced, the reference has to be released by hand.
+    await db.execute(
+        update(BlockedIP)
+        .where(BlockedIP.threat_id.in_(
+            select(Threat.id).where(Threat.target_id == target_id)
+        ))
+        .values(threat_id=None)
+    )
+
     await db.delete(target)
     await db.commit()
+
+    await record_audit(
+        db, action="target.delete",
+        actor=current_user.get("sub"), actor_role=current_user.get("role"),
+        resource_type="target", resource_id=target_id, detail="Target and its "
+        "scans/threats/incidents deleted; related block rules detached, not removed",
+        before_state=snapshot,
+    )
     return {"status": "deleted", "target_id": target_id}
 
 
@@ -246,16 +402,27 @@ async def run_osint_scan(
             raise HTTPException(status_code=403, detail="Active Nmap scanning requires admin privileges.")
         
         # Resolve target and check for private/internal IPs to prevent SSRF
-        import socket
-        import ipaddress
         nmap_target = target.ip_address or target.domain
         try:
-            resolved_ip = socket.gethostbyname(nmap_target)
+            # gethostbyname is a blocking call: it used to run straight on the event
+            # loop, so every slow or hanging DNS lookup froze the dashboard, the
+            # WebSocket broadcasts and every other request with it.
+            # Resolved through the `socket` module attribute so tests can stub it.
+            resolved_ip = await asyncio.to_thread(socket.gethostbyname, nmap_target)
             ip_obj = ipaddress.ip_address(resolved_ip)
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_multicast or ip_obj.is_reserved or ip_obj.is_link_local:
                 raise HTTPException(status_code=400, detail="Scanning internal, reserved, or loopback IPs is prohibited.")
         except socket.gaierror:
             raise HTTPException(status_code=400, detail=f"Could not resolve target hostname: {nmap_target}")
+
+        # Validate the user-supplied scan spec before it reaches the Nmap CLI.
+        # scan_type/ports/target are interpolated straight into the argument
+        # string, so an unvalidated value is a command-injection primitive.
+        validation_error = NmapService.validate_scan_inputs(
+            resolved_ip, nmap_scan_type, nmap_custom_ports
+        )
+        if validation_error:
+            raise HTTPException(status_code=400, detail=validation_error)
 
     scan_detail = "Running Shodan, VirusTotal, CVE/NVD, AlienVault OTX"
     if nmap_enabled:
@@ -321,8 +488,17 @@ async def run_osint_scan(
     mapped_ports = sorted(list(set(mapped_ports)))
     mapped_vulns = sorted(list(set(mapped_vulns)))
 
-    # Fetch existing scan for this target if it exists
-    existing_scan = (await db.execute(select(Scan).where(Scan.target_id == target.id))).scalar_one_or_none()
+    # Fetch the most recent previous scan for this target.
+    # NOTE: scalar_one_or_none() raises MultipleResultsFound as soon as a target
+    # has more than one Scan row (e.g. after POST /scan/nmap), which 500s this
+    # endpoint. There is no unique constraint on scans.target_id, so read the
+    # latest row instead of assuming at most one exists.
+    existing_scan = (await db.execute(
+        select(Scan)
+        .where(Scan.target_id == target.id)
+        .order_by(Scan.started_at.desc())
+        .limit(1)
+    )).scalars().first()
 
     if existing_scan:
         scan = existing_scan
@@ -386,13 +562,20 @@ async def run_osint_scan(
                     source_longitude=osint_results.get("summary", {}).get("geolocation", {}).get("lon")
                 )
                 
-                # Fetch custom remediation from LLM
+                # Fetch custom remediation from LLM. The text is screened before it is
+                # stored: it is model output derived partly from the scanned host's
+                # own banners, and an analyst may paste it into a shell.
                 enrichment = await LocalLLMService.generate_remediation_for_active_threat(
                     target.domain, threat.title, threat.description
                 )
+                screened, warnings = screen_remediation(enrichment.get("remediation", []))
+                if warnings:
+                    logger.warning(
+                        "LLM remediation for %r: %s", threat.title, "; ".join(warnings)
+                    )
                 threat.root_cause = enrichment.get("root_cause")
                 threat.attack_vector_detail = enrichment.get("attack_vector_detail")
-                threat.remediation = enrichment.get("remediation", [])
+                threat.remediation = screened
 
                 db.add(threat)
                 existing_threat_titles.add(threat.title)
@@ -426,9 +609,14 @@ async def run_osint_scan(
                     enrichment = await LocalLLMService.generate_remediation_for_active_threat(
                         target.domain, threat.title, threat.description
                     )
+                    screened, warnings = screen_remediation(enrichment.get("remediation", []))
+                    if warnings:
+                        logger.warning(
+                            "LLM remediation for %r: %s", threat.title, "; ".join(warnings)
+                        )
                     threat.root_cause = enrichment.get("root_cause")
                     threat.attack_vector_detail = enrichment.get("attack_vector_detail")
-                    threat.remediation = enrichment.get("remediation", [])
+                    threat.remediation = screened
                     
                 db.add(threat)
                 existing_threat_titles.add(threat.title)
@@ -451,8 +639,21 @@ async def run_osint_scan(
         autoencoder_results=autoencoder_results
     )
 
+    # ── Validate untrusted LLM output before it reaches the database ──────────
+    # `pred["probability"]` raised KeyError mid-scan (after DB writes had already
+    # begun) whenever the model omitted a field. Malformed entries are now dropped
+    # with a log line instead of failing the scan, and percentages/floats are
+    # normalised rather than rejected.
+    validated_predictions = validate_predictions(predictions)
+    if len(validated_predictions) != len(predictions):
+        logger.warning(
+            "Discarded %d malformed LLM prediction(s) out of %d",
+            len(predictions) - len(validated_predictions), len(predictions),
+        )
+    predictions = validated_predictions
+
     for pred in predictions[:5]:
-        if pred["probability"] > 0.5:
+        if pred.get("probability", 0.0) > 0.5:
             title = f"Predicted: {pred.get('predicted_attack_type', 'Unknown Threat')}"
             if title in existing_threat_titles:
                 continue
@@ -462,7 +663,7 @@ async def run_osint_scan(
             )
             severity_result = SeverityScorer.calculate_score(
                 cvss_base=pred.get("cvss_score", 5.0) or 5.0,
-                exploit_likelihood=pred["probability"],
+                exploit_likelihood=pred.get("probability", 0.0),
                 osint_context_score=osint_results.get("risk_score", 50) / 100,
             )
             geo = osint_results.get("summary", {}).get("geolocation", {})
@@ -499,7 +700,7 @@ async def run_osint_scan(
                 cve_description=pred.get("cve_description"),
                 affected_components=pred.get("affected_components"),
                 attack_vector_detail=pred.get("attack_vector_detail"),
-                remediation=pred.get("remediation"),
+                remediation=screen_remediation(pred.get("remediation"))[0],
             )
             db.add(threat)
             existing_threat_titles.add(threat.title)
@@ -600,6 +801,13 @@ async def run_nmap_scan(
 
     nmap_target = target.ip_address or target.domain
 
+    # Reject hostile scan parameters before they are interpolated into the Nmap
+    # command line (see NmapService.validate_scan_inputs). Done here as well as in
+    # the service so the client gets a 400 instead of a 500.
+    validation_error = NmapService.validate_scan_inputs(nmap_target, scan_type, ports)
+    if validation_error:
+        raise HTTPException(status_code=400, detail=validation_error)
+
     await ws_manager.broadcast_system_event(
         "info", f"Nmap {scan_type} scan initiated: {nmap_target}",
         detail=f"Admin: {current_user.get('sub')} | Ports: {ports or 'auto'}"
@@ -667,11 +875,18 @@ async def get_scan(
 
 @router.get("/ml/status", tags=["AI/ML Engine"])
 async def get_ml_status(current_user: dict = Depends(get_current_user)):
-    """Check the status of the local LLM Engine (Llama 3)."""
+    """Check the status of the local LLM Engine (Llama 3) and native ML models."""
     is_up = await LocalLLMService.is_ollama_available()
+    model_status = get_model_status()
+    # `ml_inference_is_real` is False whenever any engine fell back to fabricated
+    # weights, so a green "online" status can no longer imply real inference.
+    base = {
+        "ml_inference_is_real": model_status["models_loaded"],
+        "models": model_status,
+    }
     if is_up:
-        return {"status": "online", "engine": "Llama 3 8B (LoRA)", "message": "Connected to local Ollama API."}
-    return {"status": "offline", "engine": "LSTMPredictor / AutoencoderDetector", "message": "Ollama LLM unreachable. Using simulated statistical fallback."}
+        return {**base, "status": "online", "engine": "Llama 3 8B (LoRA)", "message": "Connected to local Ollama API."}
+    return {**base, "status": "offline", "engine": "LSTMPredictor / AutoencoderDetector", "message": "Ollama LLM unreachable. Using simulated statistical fallback."}
 
 @router.post("/ml/predict", tags=["AI/ML Engine"])
 async def predict_threats(
@@ -709,35 +924,83 @@ async def detect_anomalies(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_admin_role),
 ):
-    """Run LLM-based network anomaly detection."""
+    """Run LLM/autoencoder anomaly detection against the local host.
+
+    Two things this endpoint used to do that it must not:
+
+    * it ignored `threshold` entirely — accepted it, echoed it back, applied nothing;
+    * it filed a CRITICAL Incident for any score > 0.9, which meant an *invented*
+      attacker IP (the LLM is asked to "generate 3 realistic anomalies", and the
+      autoencoder path fabricates its flow inventory) became a real incident that
+      /soar/block-ip would happily act on.
+
+    Escalation now requires evidence that was not fabricated, and every record is
+    labelled with its provenance.
+    """
+    if not 0.0 <= threshold <= 1.0:
+        raise HTTPException(status_code=400, detail="threshold must be between 0.0 and 1.0")
+
     results = await LocalLLMService.detect_anomalies()
     anomalies = results.get("anomalies", [])
-    
-    # Create incidents/anomalies in DB
+
+    # Apply the threshold the caller asked for (previously accepted and ignored).
+    anomalies = [
+        a for a in anomalies if float(a.get("anomaly_score", 0.0) or 0.0) >= threshold
+    ]
+
+    escalated = 0
+    simulated = 0
+
     for anomaly in anomalies:
         dna = ThreatDNAFingerprinter.generate_fingerprint({"type": anomaly["classification"]})
         anomaly["threat_dna"] = dna
-        
-        # Save to AnomalyDetection table
+
+        # Provenance is explicit: only a record that positively identifies itself as
+        # real inference is eligible to become an incident.
+        evidence_source = anomaly.get("evidence_source")
+        is_simulated = anomaly.get("is_simulated", True) or evidence_source in (
+            "simulation", "llm_generated", None,
+        )
+        if is_simulated:
+            simulated += 1
+
+        score = float(anomaly.get("anomaly_score", 0.0) or 0.0)
+        anomaly["escalated"] = bool(not is_simulated and score > 0.9)
+
+        # Save to AnomalyDetection table. Provenance travels inside the JSON
+        # `features` column: AnomalyDetection has no dedicated column for it, and
+        # adding one would need a migration (create_all() cannot ALTER an existing
+        # table), so the row stays self-describing without breaking existing DBs.
+        features = dict(anomaly.get("features") or {})
+        features["_provenance"] = {
+            "evidence_source": evidence_source or "unknown",
+            "is_simulated": bool(is_simulated),
+            "synthetic_flow_inventory": bool(anomaly.get("synthetic_flow_inventory", True)),
+        }
         anomaly_record = AnomalyDetection(
             source_ip=anomaly.get("source_ip"),
             destination_ip=anomaly.get("destination_ip"),
             anomaly_score=anomaly.get("anomaly_score", 0.0),
             is_anomalous=anomaly.get("is_anomalous", True),
-            features=anomaly.get("features", {}),
+            features=features,
             reconstruction_error=anomaly.get("reconstruction_error"),
             pattern_fingerprint=dna.get("fingerprint") if isinstance(dna, dict) else dna
         )
         db.add(anomaly_record)
-        
-        # Create an Incident if score is high
-        if anomaly.get("anomaly_score", 0.0) > 0.9:
+
+        # Create an Incident only for non-simulated evidence above the threshold.
+        if anomaly["escalated"]:
+            escalated += 1
             inc = Incident(
                 title=f"Critical Anomaly: {anomaly['classification']}",
-                description=f"LLM/Autoencoder detected highly anomalous pattern from {anomaly['source_ip']} (score: {anomaly['anomaly_score']}).",
+                description=(
+                    f"Autoencoder detected a highly anomalous pattern from "
+                    f"{anomaly['source_ip']} (score: {anomaly['anomaly_score']}, "
+                    f"threshold: {threshold})."
+                ),
                 severity="critical",
                 status="open",
-                source="llm_anomaly"
+                source="ml_anomaly"
             )
             db.add(inc)
     await db.commit()
@@ -745,6 +1008,9 @@ async def detect_anomalies(
     return {
         "anomalies_detected": len(anomalies),
         "threshold": threshold,
+        "escalated_incidents": escalated,
+        "simulated_count": simulated,
+        "evidence_basis": results.get("evidence_basis", "autoencoder_simulation"),
         "anomalies": anomalies,
         "model_version": "Llama 3 8B (LoRA)",
         "timestamp": datetime.utcnow().isoformat(),
@@ -959,12 +1225,9 @@ async def bulk_ioc_search(
 async def create_incident(
     incident: IncidentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_admin_role),
+    current_user: dict = Depends(require_roles("admin", "analyst")),
 ):
     """Create a new incident with auto-generated response playbook."""
-    if current_user.get("role") not in ("admin", "analyst"):
-        raise HTTPException(status_code=403, detail="Analyst or admin role required")
-
     new_incident = Incident(
         id=str(uuid.uuid4()),
         target_id=incident.target_id,
@@ -1494,7 +1757,13 @@ async def start_new_session(
     await db.execute(update(AnomalyDetection).where(AnomalyDetection.is_archived == False).values(is_archived=True))
     
     await db.commit()
-    
+
+    await record_audit(
+        db, action="system.new_session",
+        actor=current_user.get("sub"), actor_role=current_user.get("role"),
+        resource_type="system",
+        detail="Active targets/scans/threats/incidents/anomalies archived",
+    )
     await ws_manager.broadcast_system_event(
         "info", "New Session Started",
         detail=f"Previous data archived by {current_user.get('sub', 'system')}"
@@ -1542,26 +1811,58 @@ async def get_history_summary(
 
 @router.delete("/history/all", tags=["System"])
 async def delete_all_history(
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_admin_role),
 ):
     """
     Permanently delete ALL targets, scans, threats, and incidents from the database.
     This allows users to do a fresh re-scan of domains.
+
+    Active firewall block rules survive on purpose. "Wipe the demo data" is not a
+    request to start accepting traffic from every IP an analyst had blocked, so the
+    rules are kept and only their threat references are released.
     """
     from sqlalchemy import delete as sql_delete
+
+    # Record what is about to disappear, so the audit row is useful on its own.
+    # Separate scalar counts: selecting several count()s over different tables in
+    # one statement would cross-join them and report inflated numbers.
+    deleted_summary = {
+        "targets": (await db.execute(select(func.count(Target.id)))).scalar() or 0,
+        "scans": (await db.execute(select(func.count(Scan.id)))).scalar() or 0,
+        "threats": (await db.execute(select(func.count(Threat.id)))).scalar() or 0,
+        "incidents": (await db.execute(select(func.count(Incident.id)))).scalar() or 0,
+    }
+
+    # Release block-rule references before dropping threats: blocked_ips.threat_id
+    # is a real foreign key now that SQLite enforcement is on.
+    await db.execute(update(BlockedIP).values(threat_id=None))
 
     # Delete in dependency order to respect foreign keys
     await db.execute(sql_delete(ThreatPrediction))
     await db.execute(sql_delete(AnomalyDetection))
     await db.execute(sql_delete(RemediationLog))
     await db.execute(sql_delete(OSINTData))
-    await db.execute(sql_delete(Threat))
+    # Incident.threat_id references threats.id, so incidents must be removed
+    # BEFORE threats regardless of SQLite only enforcing FKs when the pragma is
+    # enabled — the previous Threat-before-Incident order only worked because
+    # SQLite skips FK enforcement by default.
     await db.execute(sql_delete(Incident))
+    await db.execute(sql_delete(Threat))
     await db.execute(sql_delete(Scan))
     await db.execute(sql_delete(Target))
     await db.commit()
 
+    await record_audit(
+        db, action="history.delete_all",
+        actor=current_user.get("sub"), actor_role=current_user.get("role"),
+        resource_type="history",
+        detail=f"Permanently deleted history: {deleted_summary}. "
+               "Active firewall block rules were preserved.",
+        ip_address=_client_ip(http_request), request_id=request_id_of(http_request),
+        before_state=deleted_summary,
+    )
     await ws_manager.broadcast_system_event(
         "warning", "All History Deleted",
         detail=f"All scan history permanently deleted by {current_user.get('sub', 'system')}"
@@ -1617,41 +1918,93 @@ async def get_history_target_details(
 # SOAR — Security Orchestration, Automation & Response
 # ─────────────────────────────────────────────────────────────────
 
-# In-memory mock firewall store (replace with real firewall API in production)
-_blocked_ips: Dict[str, Any] = {}
-
-
+# Firewall rules live in the `blocked_ips` table, not in a module-level dict.
+# The dict meant a backend restart silently emptied the "firewall" while dashboards
+# still showed the old rules, so an operator could reasonably believe a hostile IP
+# was being dropped when nothing was. Multi-worker uvicorn also gave each process
+# its own copy of the dict.
 class SOARBlockRequest(BaseModel):
     ip: str
     threat_id: Optional[str] = None
     reason: Optional[str] = "Blocked via ITAP SOC Dashboard"
 
 
+def _block_rule_dict(rule: BlockedIP) -> Dict[str, Any]:
+    """Wire shape kept identical to the old dict so the UI needs no change."""
+    return {
+        "ip": rule.ip_address,
+        "rule_id": rule.rule_id,
+        "reason": rule.reason,
+        "blocked_by": rule.blocked_by,
+        "blocked_at": rule.blocked_at.isoformat() if rule.blocked_at else None,
+        "threat_id": rule.threat_id,
+    }
+
+
+def _firewall_command(ip: str, rule_id: str) -> str:
+    """The command an operator would run for real. ITAP never executes it."""
+    tool = "ip6tables" if ":" in ip else "iptables"
+    return f"{tool} -A INPUT -s {ip} -j DROP  # {rule_id}"
+
+
 @router.post("/soar/block-ip", tags=["SOAR"])
 async def soar_block_ip(
     request: SOARBlockRequest,
+    http_request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_admin_role),
 ):
     """
     [ADMIN ONLY] Block a malicious IP via the mock firewall integration.
     In production, replace the mock store with a real firewall API call.
+
+    Validation uses ``ipaddress`` rather than the previous ``^(\\d{1,3}\\.){3}\\d{1,3}$``
+    regex: that regex accepted 999.1.1.1 and rejected every IPv6 address, including
+    the IPv6 addresses the anomaly detector reports.
     """
-    import re
-    # Validate IP format
-    ip_pattern = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
-    if not ip_pattern.match(request.ip):
+    try:
+        ip = str(ipaddress.ip_address(request.ip.strip()))
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address format")
 
-    rule_id = f"ITAP-{uuid.uuid4().hex[:8].upper()}"
-    _blocked_ips[request.ip] = {
-        "ip": request.ip,
-        "rule_id": rule_id,
-        "reason": request.reason,
-        "blocked_by": current_user.get("sub", "admin"),
-        "blocked_at": datetime.utcnow().isoformat(),
-        "threat_id": request.threat_id,
-    }
+    existing = (await db.execute(
+        select(BlockedIP).where(BlockedIP.ip_address == ip)
+    )).scalar_one_or_none()
+    if existing is not None and existing.status == "active":
+        # Idempotent: double-clicking "block" must not mint a second rule for the
+        # same address, nor claim a fresh action happened.
+        return {
+            "status": "already_blocked",
+            "ip": ip,
+            "rule_id": existing.rule_id,
+            "message": f"IP {ip} was already blocked by rule {existing.rule_id}.",
+            "mock_command": _firewall_command(ip, existing.rule_id),
+        }
+
+    if existing is not None:
+        # ip_address is unique: one row per address holding its current state, while
+        # the block/unblock history lives in the audit trail. Reusing the row keeps
+        # re-blocking an IP that was released earlier from violating the constraint.
+        rule = existing
+        rule.rule_id = f"ITAP-{uuid.uuid4().hex[:8].upper()}"
+        rule.reason = request.reason
+        rule.blocked_by = current_user.get("sub", "admin")
+        rule.blocked_at = datetime.utcnow()
+        rule.released_at = None
+        rule.status = "active"
+        rule.threat_id = request.threat_id
+    else:
+        rule = BlockedIP(
+            id=str(uuid.uuid4()),
+            ip_address=ip,
+            rule_id=f"ITAP-{uuid.uuid4().hex[:8].upper()}",
+            reason=request.reason,
+            blocked_by=current_user.get("sub", "admin"),
+            blocked_at=datetime.utcnow(),
+            status="active",
+            threat_id=request.threat_id,
+        )
+        db.add(rule)
 
     # Update the linked threat status if provided
     if request.threat_id:
@@ -1659,45 +2012,136 @@ async def soar_block_ip(
         if threat:
             threat.is_resolved = True
             threat.resolved_at = datetime.utcnow()
-            await db.commit()
 
+    await db.commit()
+    await db.refresh(rule)
+
+    await record_audit(
+        db, action="ip.block",
+        actor=current_user.get("sub"), actor_role=current_user.get("role"),
+        resource_type="blocked_ip", resource_id=rule.rule_id,
+        detail=f"Blocked {ip}. Reason: {request.reason}",
+        ip_address=_client_ip(http_request), request_id=request_id_of(http_request),
+        after_state=_block_rule_dict(rule),
+    )
     await ws_manager.broadcast_system_event(
-        "warning", f"IP Blocked: {request.ip}",
-        detail=f"Firewall rule {rule_id} applied by {current_user.get('sub', 'admin')}. Reason: {request.reason}"
+        "warning", f"IP Blocked: {ip}",
+        detail=f"Firewall rule {rule.rule_id} applied by {current_user.get('sub', 'admin')}. Reason: {request.reason}"
     )
 
     return {
         "status": "blocked",
-        "ip": request.ip,
-        "rule_id": rule_id,
-        "message": f"IP {request.ip} has been blocked. Firewall rule {rule_id} is active.",
-        "mock_command": f"iptables -A INPUT -s {request.ip} -j DROP  # {rule_id}",
+        "ip": ip,
+        "rule_id": rule.rule_id,
+        "message": f"IP {ip} has been blocked. Firewall rule {rule.rule_id} is active.",
+        "mock_command": _firewall_command(ip, rule.rule_id),
     }
 
 
 @router.get("/soar/blocked-ips", tags=["SOAR"])
 async def soar_get_blocked_ips(
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     """Get all currently blocked IPs and their firewall rules."""
+    rules = (await db.execute(
+        select(BlockedIP).where(BlockedIP.status == "active")
+        .order_by(BlockedIP.blocked_at.desc())
+    )).scalars().all()
     return {
-        "count": len(_blocked_ips),
-        "blocked_ips": list(_blocked_ips.values()),
+        "count": len(rules),
+        "blocked_ips": [_block_rule_dict(r) for r in rules],
     }
 
 
 @router.delete("/soar/blocked-ips/{ip}", tags=["SOAR"])
 async def soar_unblock_ip(
     ip: str,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_admin_role),
 ):
-    """[ADMIN ONLY] Remove a firewall block rule for a specific IP."""
-    if ip not in _blocked_ips:
-        raise HTTPException(status_code=404, detail=f"IP {ip} is not in the block list")
+    """[ADMIN ONLY] Release a firewall block rule for a specific IP.
 
-    rule = _blocked_ips.pop(ip)
-    await ws_manager.broadcast_system_event(
-        "info", f"IP Unblocked: {ip}",
-        detail=f"Firewall rule {rule['rule_id']} removed by {current_user.get('sub', 'admin')}"
+    The row is kept with status "released" rather than deleted: "who unblocked this,
+    and when" is exactly the question an audit trail exists to answer.
+    """
+    try:
+        canonical = str(ipaddress.ip_address(ip.strip()))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address format")
+
+    rule = (await db.execute(
+        select(BlockedIP).where(BlockedIP.ip_address == canonical, BlockedIP.status == "active")
+    )).scalar_one_or_none()
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"IP {canonical} is not in the block list")
+
+    rule_id = rule.rule_id
+    rule.status = "released"
+    rule.released_at = datetime.utcnow()
+    await db.commit()
+
+    await record_audit(
+        db, action="ip.unblock",
+        actor=current_user.get("sub"), actor_role=current_user.get("role"),
+        resource_type="blocked_ip", resource_id=rule_id,
+        detail=f"Released block on {canonical}",
+        ip_address=_client_ip(http_request), request_id=request_id_of(http_request),
+        before_state={"status": "active"}, after_state={"status": "released"},
     )
-    return {"status": "unblocked", "ip": ip, "rule_id": rule["rule_id"]}
+    await ws_manager.broadcast_system_event(
+        "info", f"IP Unblocked: {canonical}",
+        detail=f"Firewall rule {rule_id} removed by {current_user.get('sub', 'admin')}"
+    )
+    return {"status": "unblocked", "ip": canonical, "rule_id": rule_id}
+
+
+# ─────────────────────────────────────────────────────────────────
+# Platform audit trail
+# ─────────────────────────────────────────────────────────────────
+
+@router.get("/system/audit-log", tags=["System"])
+async def get_audit_log(
+    limit: int = Query(100, ge=1, le=1000),
+    actor: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    outcome: Optional[str] = Query(None),
+    since_days: Optional[int] = Query(None, ge=1, le=3650),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_admin_role),
+):
+    """
+    [ADMIN ONLY] Read the append-only trail of privileged platform actions.
+
+    Admin-only and read-only on purpose. The trail is the evidence an investigator
+    relies on *after* an operator has been locked out, so an analyst role must not be
+    able to read it selectively, and no role can edit it: there is no DELETE here.
+    Retention/pruning is a deployment concern, not an endpoint.
+    """
+    rows = await audit_trail(
+        db, limit=limit, actor=actor, action=action, outcome=outcome,
+        since_days=since_days,
+    )
+    return {
+        "count": len(rows),
+        "total_rows": await audit_count(db),
+        "entries": [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "actor": r.actor,
+                "actor_role": r.actor_role,
+                "action": r.action,
+                "resource_type": r.resource_type,
+                "resource_id": r.resource_id,
+                "outcome": r.outcome,
+                "detail": r.detail,
+                "ip_address": r.ip_address,
+                "request_id": r.request_id,
+                "before_state": r.before_state,
+                "after_state": r.after_state,
+            }
+            for r in rows
+        ],
+    }

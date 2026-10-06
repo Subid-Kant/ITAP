@@ -20,9 +20,9 @@
     "timestamp": "2026-09-16T16:12:35.442121"
   },
   "scanme.nmap.org": {
-    "fingerprint": "466d0c102f1222006105a30dd93b1b1208f5972371e63c0b010809f59c4c957e",
-    "last_event_id": "evt-8de9e380",
-    "timestamp": "2026-09-16T18:20:51.912648"
+    "fingerprint": "e1ca09c71cbc26074051f21dc5098f891b4de752a1af4a70339349d215b1d903",
+    "last_event_id": "evt-4265a293",
+    "timestamp": "2026-10-06T10:39:11.009878"
   },
   "badssl.com": {
     "fingerprint": "3064ef616dba38ad72376d9e2a644fccb4e2e7655b8dcfa21243ff9572c3c61a",

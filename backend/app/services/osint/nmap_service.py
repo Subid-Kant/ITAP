@@ -10,6 +10,7 @@ import asyncio
 import nmap
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from app.core.config import settings
@@ -275,6 +276,58 @@ class NmapService:
             "exact_location": f"{host}:{port}/{proto}",
         }
 
+    # Ports must be a plain Nmap port spec ("80,443" or "1-1024"). Anything else,
+    # including spaces, semicolons and shell metacharacters, is rejected because
+    # the spec is interpolated into the Nmap argument string.
+    _PORTS_RE = re.compile(r"^\d{1,5}(?:[,-]\d{1,5})*$")
+
+    # Hostname, IPv4 literal, or bracketed IPv6 literal.
+    _TARGET_RE = re.compile(
+        r"^(?:\d{1,3}(?:\.\d{1,3}){3}"
+        r"|\[[0-9A-Fa-f:.]+\]"
+        r"|(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)$"
+    )
+
+    @staticmethod
+    def validate_scan_inputs(
+        target: str,
+        scan_type: str = "standard",
+        ports: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Validate user supplied scan parameters before they reach the Nmap binary.
+
+        Returns an error message string when the input must be rejected, or None
+        when the input is safe to scan. Callers should refuse to scan on a
+        non-None result rather than silently substituting a default.
+        """
+        if not isinstance(target, str) or not target.strip():
+            return "Target must be a non-empty string."
+        if not NmapService._TARGET_RE.match(target.strip()):
+            return (
+                f"Invalid target {target!r}: expected a hostname, IPv4 address "
+                "or bracketed IPv6 address."
+            )
+        if scan_type not in ("quick", "standard", "deep"):
+            return (
+                f"Invalid scan_type {scan_type!r}: expected one of "
+                "quick, standard, deep."
+            )
+        if ports is not None:
+            if (
+                not isinstance(ports, str)
+                or not NmapService._PORTS_RE.match(ports.strip())
+            ):
+                return (
+                    f"Invalid ports {ports!r}: expected a comma or hyphen "
+                    "separated list of port numbers, e.g. '22,80,443' or '1-1024'."
+                )
+            for part in re.split(r"[,-]", ports.strip()):
+                if not 1 <= int(part) <= 65535:
+                    return f"Port {part} is out of range: must be between 1 and 65535."
+        return None
+
     @staticmethod
     async def scan(
         target: str,
@@ -285,6 +338,18 @@ class NmapService:
         Async wrapper — runs the blocking Nmap scan in a thread pool.
         This is the main entry point for use in async FastAPI routes.
         """
+        # Reject malformed or hostile parameters before they are interpolated into
+        # the Nmap argument string (see validate_scan_inputs).
+        error = NmapService.validate_scan_inputs(target, scan_type, ports)
+        if error:
+            logger.warning(f"Rejected Nmap scan request: {error}")
+            return {
+                "status": "error",
+                "error": error,
+                "target": target,
+                "scan_type": scan_type,
+            }
+
         return await asyncio.to_thread(
             NmapService._run_scan_sync, target, scan_type, ports
         )

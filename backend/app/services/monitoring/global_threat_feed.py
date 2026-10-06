@@ -64,14 +64,28 @@ class GlobalThreatFeed:
         self.recent_cves_url = "https://cve.circl.lu/api/last"
         self._cache = {}
         self._cache_time = None
+        # Held so stop() can cancel it: a discarded asyncio task may even be
+        # garbage-collected mid-flight, and stop() that only flips `is_running`
+        # leaves the process waiting out the 1-hour sleep below.
+        self._task: Optional[asyncio.Task] = None
+        self._stop_evt = asyncio.Event()
 
     async def start(self):
         self.is_running = True
+        self._stop_evt.clear()
+        self._task = asyncio.create_task(self._monitor_loop(), name="global_threat_feed")
         logger.info("Started real-time global threat feeds")
-        asyncio.create_task(self._monitor_loop())
 
     async def stop(self):
         self.is_running = False
+        self._stop_evt.set()
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
         logger.info("Stopped global threat feeds")
 
     async def fetch_cisa_kev(self):
@@ -82,7 +96,10 @@ class GlobalThreatFeed:
                 return self._cache["kev"]
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.cisa_kev_url, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as resp:
+                # No ssl=False: certificate verification stays on. Both endpoints
+                # present valid public certs, and disabling it let anyone in the
+                # path rewrite the feed that becomes CRITICAL incident rows.
+                async with session.get(self.cisa_kev_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         vuls = data.get("vulnerabilities", [])
@@ -100,7 +117,7 @@ class GlobalThreatFeed:
         """Fetch recent CVEs from circl.lu."""
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(self.recent_cves_url, timeout=aiohttp.ClientTimeout(total=15), ssl=False) as resp:
+                async with session.get(self.recent_cves_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         return data[:15]
@@ -144,9 +161,19 @@ class GlobalThreatFeed:
         while self.is_running:
             try:
                 await self._process_feeds()
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.error(f"Error in global threat feed loop: {e}")
-            await asyncio.sleep(3600)  # Check hourly
+            # Wait up to an hour, but wake immediately when stop() is called.
+            # A bare asyncio.sleep(3600) meant Ctrl+C / reload blocked until the
+            # sleep finished, so graceful shutdown often never completed.
+            try:
+                await asyncio.wait_for(self._stop_evt.wait(), timeout=3600)
+            except asyncio.TimeoutError:
+                pass
+            else:
+                break   # stop() was called
 
     async def _process_feeds(self):
         kev = await self.fetch_cisa_kev()

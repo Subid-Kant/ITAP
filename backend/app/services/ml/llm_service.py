@@ -3,6 +3,8 @@ import json
 import logging
 from typing import Dict, Any, List
 
+from app.services.ml.output_validation import UNTRUSTED_EVIDENCE_RULE, wrap_untrusted
+
 logger = logging.getLogger("itap.llm")
 
 # Default to Ollama local API
@@ -39,10 +41,14 @@ class LocalLLMService:
 
         prompt = f"""
         You are an elite Incident Responder and Forensics Analyst. Review the following evidence for the target: {domain}.
-        - OSINT Summary: {json.dumps(osint_data.get('summary', {}))}
-        - LSTM Time-Series Predictions: {json.dumps(lstm_results) if lstm_results else 'None'}
-        - Autoencoder Anomaly Detection: {json.dumps(autoencoder_results) if autoencoder_results else 'None'}
-        
+
+        {UNTRUSTED_EVIDENCE_RULE}
+        {wrap_untrusted({
+            "osint_summary": osint_data.get('summary', {}),
+            "lstm_time_series_predictions": lstm_results,
+            "autoencoder_anomaly_detection": autoencoder_results,
+        })}
+
         Based on ALL of this numeric and textual evidence, generate the final JSON triage and predict the top 3 most likely cyber attacks.
         For each threat, your analysis MUST be hyper-specific and technical:
         1. The exact attack type and CVE if applicable.
@@ -134,8 +140,12 @@ class LocalLLMService:
 
         prompt = f"""
         You are an elite Incident Responder. Provide a precise, highly technical root cause and remediation plan for the following confirmed vulnerability on {domain}:
-        Vulnerability: {threat_title}
-        Details: {threat_desc}
+
+        {UNTRUSTED_EVIDENCE_RULE}
+        {wrap_untrusted({
+            "vulnerability_title": threat_title,
+            "vulnerability_details": threat_desc,
+        }, label="vulnerability")}
 
         Output MUST be in strict JSON object format. DO NOT use markdown code blocks (```json) in your response, just the raw JSON:
         {{
@@ -192,6 +202,8 @@ class LocalLLMService:
         prompt = """
         You are an advanced cybersecurity AI analyzing recent network traffic. 
         Generate 3 realistic anomalies based on common attack patterns (e.g., brute force, port scan, data exfiltration).
+        These are ILLUSTRATIVE EXAMPLES, not observations: state nothing as a confirmed
+        finding, and do not imply any real host or address is involved.
         Output MUST be in strict JSON array format:
         [
           {{
@@ -216,9 +228,25 @@ class LocalLLMService:
                         response_text = data.get("response", "[]")
                         try:
                             anomalies = json.loads(response_text)
+                            if not isinstance(anomalies, list):
+                                return {"anomalies_detected": 0, "anomalies": []}
+                            # The prompt asks the model to *generate* plausible
+                            # anomalies, and it is given no real traffic data — so
+                            # every field (including the attacker IPs) is invented.
+                            # Tag it, because the API endpoint downstream used to file
+                            # CRITICAL incidents against these fabricated addresses.
+                            flagged = []
+                            for item in anomalies:
+                                if not isinstance(item, dict):
+                                    continue
+                                item.setdefault("is_anomalous", True)
+                                item["is_simulated"] = True
+                                item["synthetic_flow_inventory"] = True
+                                item["evidence_source"] = "llm_generated"
+                                flagged.append(item)
                             return {
-                                "anomalies_detected": len(anomalies),
-                                "anomalies": anomalies
+                                "anomalies_detected": len(flagged),
+                                "anomalies": flagged,
                             }
                         except json.JSONDecodeError:
                             return {"anomalies_detected": 0, "anomalies": []}
