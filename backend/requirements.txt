@@ -1,45 +1,52 @@
 # ITAP v2.0 — Backend Dependencies
-# Production-ready dependency set (relaxed pins for Python 3.14 compat)
+#
+# This list is derived from the code, not from copy-paste: every entry below is
+# either imported by something under backend/app (or backend/main.py) or is a hard
+# runtime dependency of a library that is. Verified on Python 3.14.
+#
+# Install:        pip install -r requirements.txt
+# Run the tests:  pip install -r requirements-dev.txt   (includes this file)
+#
+# Entries removed in the v2.0 audit — each was AST- and grep-verified as never
+# imported by backend code, so a fresh install no longer pulls them:
+#   requests, shodan, jinja2, pandas, scipy, scikit-learn,
+#   aiosmtplib (email alerts use the stdlib smtplib),
+#   alembic (no migrations directory exists yet),
+#   passlib (passwords are hashed with bcrypt directly, see app/core/security.py)
 
 # ── Core Framework ───────────────────────────
 fastapi>=0.111.0
-uvicorn[standard]>=0.30.1
-python-dotenv>=1.0.1
+uvicorn[standard]>=0.30.1      # [standard] supplies the websockets server for /ws/live
+starlette>=0.37.0              # imported directly (StaticFiles, WebSocketDisconnect)
+python-dotenv>=1.0.1           # pydantic-settings reads backend/.env through this
 pydantic>=2.7.4
 pydantic-settings>=2.3.4
-python-multipart>=0.0.9
 
 # ── Database ─────────────────────────────────
 sqlalchemy>=2.0.31
-greenlet>=3.0.0            # Required by SQLAlchemy async engine
-aiosqlite>=0.20.0          # SQLite async driver (dev/demo)
-asyncpg>=0.29.0            # PostgreSQL async driver (production)
-alembic>=1.13.1
+greenlet>=3.0.0                # required by SQLAlchemy's async engine
+aiosqlite>=0.20.0              # driver for the default DATABASE_URL (dev/demo)
+asyncpg>=0.29.0                # PostgreSQL driver, used only when DATABASE_URL says so
 
 # ── Security & Auth ──────────────────────────
 python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0                  # imported directly by app/core/security.py
 
-# ── OSINT APIs ───────────────────────────────
-shodan>=1.31.0
-requests>=2.32.3
-aiohttp>=3.9.5
-httpx>=0.27.0
-python-nmap>=0.7.1             # Nmap active scanning wrapper
+# ── OSINT / outbound HTTP ────────────────────
+aiohttp>=3.9.5                 # every OSINT and webhook call goes through this
+python-nmap>=0.7.1             # active scanning wrapper (imported as `nmap`)
 
-# ── ML/AI ────────────────────────────────────
+# ── ML inference ─────────────────────────────
+# There is no TensorFlow dependency by design: app/services/ml/native_inference.py
+# reads the .h5 artifacts with h5py and runs the maths in numpy.
 numpy>=1.26.4
-pandas>=2.2.2
-scikit-learn>=1.5.1
-scipy>=1.13.1
 h5py>=3.11.0
 
-# ── WebSocket ────────────────────────────────
-websockets>=12.0
+# ── System monitoring ────────────────────────
+psutil>=5.9.0                  # server monitor + machine scanner
 
-# ── Email ────────────────────────────────────
-aiosmtplib>=3.0.1          # Async SMTP (optional, for production email)
+# ── Optional but supported ───────────────────
+websockets>=12.0               # /ws/live, explicit so it survives a plain uvicorn install
+python-multipart>=0.0.9        # only needed once an endpoint uses Form()/File()
+redis>=5.0.0                   # optional cache; app.core.cache degrades without a server
 
-# ── Utils ────────────────────────────────────
-jinja2>=3.1.4
-psutil>=5.9.0              # System/process monitoring
