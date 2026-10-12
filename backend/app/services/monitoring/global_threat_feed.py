@@ -95,11 +95,12 @@ class GlobalThreatFeed:
             if (datetime.utcnow() - self._cache_time).total_seconds() < 1800:
                 return self._cache["kev"]
         try:
-            async with aiohttp.ClientSession() as session:
-                # No ssl=False: certificate verification stays on. Both endpoints
-                # present valid public certs, and disabling it let anyone in the
-                # path rewrite the feed that becomes CRITICAL incident rows.
-                async with session.get(self.cisa_kev_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            import certifi
+            import ssl
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            headers = {"User-Agent": "ITAP-ThreatIntel/2.0"}
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(self.cisa_kev_url, ssl=ssl_ctx, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         vuls = data.get("vulnerabilities", [])
@@ -116,8 +117,12 @@ class GlobalThreatFeed:
     async def fetch_recent_cves(self):
         """Fetch recent CVEs from circl.lu."""
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.recent_cves_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            import certifi
+            import ssl
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            headers = {"User-Agent": "ITAP-ThreatIntel/2.0"}
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(self.recent_cves_url, ssl=ssl_ctx, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         return data[:15]

@@ -316,13 +316,15 @@ class MachineScannerService:
     async def _get_host_geo(self) -> dict:
         """Detect public IP and geolocate via ipinfo.io (free, no key)."""
         try:
-            async with aiohttp.ClientSession() as s:
-                # Certificate verification stays on: this is the host's own
-                # identity being resolved, and ssl=False made it spoofable.
+            import certifi
+            import ssl
+            ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            headers = {"Accept": "application/json", "User-Agent": "ITAP-MachineScanner/2.0"}
+            async with aiohttp.ClientSession(headers=headers) as s:
                 async with s.get(
                     self.IPINFO_URL,
+                    ssl=ssl_ctx,
                     timeout=aiohttp.ClientTimeout(total=8),
-                    headers={"Accept": "application/json"},
                 ) as r:
                     if r.status == 200:
                         data = await r.json(content_type=None)
