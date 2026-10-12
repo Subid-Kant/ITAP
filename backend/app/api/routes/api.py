@@ -576,6 +576,9 @@ async def run_osint_scan(
                 threat.root_cause = enrichment.get("root_cause")
                 threat.attack_vector_detail = enrichment.get("attack_vector_detail")
                 threat.remediation = screened
+                threat.affected_components = enrichment.get("affected_components") or [
+                    vuln.get("service") or vuln.get("script") or "Network Service"
+                ]
 
                 db.add(threat)
                 existing_threat_titles.add(threat.title)
@@ -617,6 +620,13 @@ async def run_osint_scan(
                     threat.root_cause = enrichment.get("root_cause")
                     threat.attack_vector_detail = enrichment.get("attack_vector_detail")
                     threat.remediation = screened
+                    threat.affected_components = enrichment.get("affected_components") or [
+                        f"{svc.get('service', 'Service')} (port {svc.get('port', 'N/A')})"
+                    ]
+                else:
+                    threat.affected_components = [
+                        f"{svc.get('service', 'Service')} (port {svc.get('port', 'N/A')})"
+                    ]
                     
                 db.add(threat)
                 existing_threat_titles.add(threat.title)
@@ -1490,15 +1500,41 @@ async def get_dashboard_stats(
         if phase and phase in kill_chain_progression:
             kill_chain_progression[phase] += 1
 
-    # ── Attack Surface Summary — top affected components from real threats ──
+    # ── Attack Surface Summary — top affected components from real threats & OSINT scans ──
     component_counts: Dict[str, int] = {}
+    component_severities: Dict[str, str] = {}
+
     for threat in all_active_threats:
         components = threat.affected_components or []
         if isinstance(components, list):
             for comp in components:
                 component_counts[comp] = component_counts.get(comp, 0) + 1
+                if threat.severity == SeverityLevel.CRITICAL or threat.severity == SeverityLevel.HIGH:
+                    component_severities[comp] = "HIGH"
+
+    # Also extract threat_surface components from recent completed scans if available
+    latest_scans_result = await db.execute(
+        select(Scan).where(
+            and_(Scan.status == DBScanStatus.COMPLETED, Scan.is_archived == False)
+        ).order_by(Scan.completed_at.desc()).limit(10)
+    )
+    for scan in latest_scans_result.scalars().all():
+        res = scan.results or {}
+        ts = res.get("threat_surface") or []
+        if isinstance(ts, list):
+            for item in ts:
+                comp = item.get("component")
+                if comp:
+                    component_counts[comp] = component_counts.get(comp, 0) + max(item.get("cve_count", 1), 1)
+                    if item.get("severity") in ("CRITICAL", "HIGH"):
+                        component_severities[comp] = "HIGH"
+
     attack_surface_summary = [
-        {"component": k, "threat_count": v, "severity": "HIGH" if v >= 3 else "MEDIUM"}
+        {
+            "component": k,
+            "threat_count": v,
+            "severity": component_severities.get(k, "HIGH" if v >= 3 else "MEDIUM"),
+        }
         for k, v in sorted(component_counts.items(), key=lambda x: -x[1])[:8]
     ]
 

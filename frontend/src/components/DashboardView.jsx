@@ -79,14 +79,22 @@ function SeverityChart({ data }) {
 // Attack Surface Panel
 function AttackSurfacePanel({ data }) {
   if (!data?.length) return (
-    <div style={{ color: '#4B5563', fontSize: 12, textAlign: 'center', padding: 16 }}>
+    <div style={{ color: '#64748B', fontSize: 12, textAlign: 'center', padding: 24 }}>
       No attack surface data yet — run an OSINT scan.
     </div>
   );
+
+  const colors = {
+    CRITICAL: '#FF2E63',
+    HIGH: '#F59E0B',
+    MEDIUM: '#378ADD',
+    LOW: '#22C55E',
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {data.map((item, i) => {
-        const c = item.severity === 'HIGH' ? '#F59E0B' : '#378ADD';
+        const c = colors[item.severity?.toUpperCase()] || '#378ADD';
         return (
           <div key={i} style={{
             display: 'flex', alignItems: 'center', gap: 10,
@@ -94,7 +102,7 @@ function AttackSurfacePanel({ data }) {
             border: `1px solid ${c}25`, borderRadius: 7,
           }}>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0 }} />
-            <div style={{ flex: 1, fontSize: 12, color: '#B4B2A9', fontWeight: 500 }}>{item.component}</div>
+            <div style={{ flex: 1, fontSize: 12, color: '#F0EFE9', fontWeight: 500 }}>{item.component}</div>
             <div style={{ fontSize: 11, color: c, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
               {item.threat_count} threat{item.threat_count !== 1 ? 's' : ''}
             </div>
