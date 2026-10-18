@@ -203,4 +203,9 @@ export const api = {
   // ── System ───────────────────────────────────────────────
   newSession: () => request('/system/new-session', { method: 'POST' }),
   deleteAllHistory: () => request('/history/all', { method: 'DELETE' }),
+  // Admin-only: 403 for analyst/viewer — AuditLogView renders that as a denial panel.
+  getAuditLog: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return request(`/system/audit-log${q ? '?' + q : ''}`);
+  },
 };

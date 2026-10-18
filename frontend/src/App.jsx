@@ -18,6 +18,7 @@ import IOCWorkbench from './components/IOCWorkbench';
 import ReportsView from './components/ReportsView';
 import LoginView from './components/LoginView';
 import HistoryView from './components/HistoryView';
+import AuditLogView from './components/AuditLogView';
 import CommandPalette from './components/CommandPalette';
 import SettingsView from './components/SettingsView';
 import ToastProvider, { useToast } from './components/ToastNotification';
@@ -325,6 +326,7 @@ function AppContent() {
       case 'ioc':         ViewComponent = <IOCWorkbench />; break;
       case 'reports':     ViewComponent = <ReportsView scheduler={scheduler} />; break;
       case 'history':     ViewComponent = <HistoryView />; break;
+case 'audit':       ViewComponent = <AuditLogView />; break;
       case 'settings':    ViewComponent = <SettingsView />; break;
       default:            ViewComponent = <SecurityPostureView stats={stats} scheduler={scheduler} />; break;
     }
@@ -352,6 +354,7 @@ function AppContent() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onNavigate={(view) => { setActiveView(view); setPaletteOpen(false); }}
+        user={user}
       />
       <div className="app-layout">
         <Sidebar

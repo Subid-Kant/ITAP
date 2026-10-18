@@ -87,7 +87,7 @@ copy .env.example .env
 python seed_data.py
 
 # Start server
-uvicorn main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 8000
 ```
 </details>
 
@@ -254,8 +254,7 @@ Add to `backend/.env` for live OSINT data (demo mode works without keys):
 ```env
 SHODAN_API_KEY=your_key
 VIRUSTOTAL_API_KEY=your_key
-CENSYS_API_ID=your_id
-CENSYS_API_SECRET=your_secret
+CENSYS_PAT=your_pat_from_platform_censys_io
 ALIENVAULT_OTX_KEY=your_key
 NVD_API_KEY=your_key
 ```

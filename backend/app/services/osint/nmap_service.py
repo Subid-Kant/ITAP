@@ -12,6 +12,7 @@ import logging
 import os
 import re
 from datetime import datetime
+from app.core.timeutils import utcnow
 from typing import Dict, Any, List, Optional
 from app.core.config import settings
 
@@ -49,7 +50,7 @@ class NmapService:
           - "deep"     : All ports + NSE vuln scripts (slow but thorough)
         """
         scanner = NmapService._get_scanner()
-        scan_start = datetime.utcnow()
+        scan_start = utcnow()
 
         # Build scan arguments based on type
         # Note: Avoid '-p-' (65,535 ports) as it can take 30-60+ mins over the internet.
@@ -97,7 +98,7 @@ class NmapService:
                 "scan_type": scan_type,
             }
 
-        scan_end = datetime.utcnow()
+        scan_end = utcnow()
         duration = (scan_end - scan_start).total_seconds()
 
         # Parse results

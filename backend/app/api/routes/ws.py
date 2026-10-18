@@ -6,6 +6,7 @@ import json
 import logging
 import asyncio
 from datetime import datetime
+from app.core.timeutils import utcnow
 from typing import List, Dict, Any
 from fastapi import WebSocket
 
@@ -105,7 +106,7 @@ class ConnectionManager:
             "message": "ITAP Live Feed connected",
             "user": payload.get("sub"),
             "role": payload.get("role"),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
             "active_connections": len(self.active_connections),
         }, websocket)
         return True
@@ -147,7 +148,7 @@ class ConnectionManager:
         await self.broadcast({
             "type": "threat_detected",
             "data": threat_data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         })
 
     async def broadcast_scan_complete(self, scan_data: Dict[str, Any]):
@@ -155,7 +156,7 @@ class ConnectionManager:
         await self.broadcast({
             "type": "scan_complete",
             "data": scan_data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         })
 
     async def broadcast_incident(self, incident_data: Dict[str, Any]):
@@ -163,7 +164,7 @@ class ConnectionManager:
         await self.broadcast({
             "type": "incident_created",
             "data": incident_data,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         })
 
     async def broadcast_system_event(self, level: str, message: str, detail: str = ""):
@@ -173,7 +174,7 @@ class ConnectionManager:
             "level": level,       # info | warning | error | critical
             "message": message,
             "detail": detail,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         })
 
 

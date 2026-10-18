@@ -204,7 +204,7 @@ export default function SettingsView() {
                           SHODAN_API_KEY=<br />
                           VIRUSTOTAL_API_KEY=<br />
                           ALIENVAULT_OTX_KEY=<br />
-                          CENSYS_API_ID / CENSYS_API_SECRET=<br />
+                          CENSYS_PAT= (or CENSYS_API_KEY=)<br />
                           NVD_API_KEY=
                         </div>
                         <div style={{ marginTop: 12 }}>

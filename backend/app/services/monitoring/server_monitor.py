@@ -8,6 +8,7 @@ import psutil
 import socket
 import logging
 from datetime import datetime
+from app.core.timeutils import utcnow
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -74,7 +75,7 @@ class ServerMonitor:
             "active_connections": len(conns),
             "connections_sample": conns[:10],
             "hostname": socket.gethostname(),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": utcnow().isoformat()
         }
 
     async def get_current_stats(self) -> dict:
@@ -147,7 +148,7 @@ class ServerMonitor:
 
         for alert in alerts:
             # Simple debounce to prevent DB spam (alert once per hour per type)
-            now = datetime.utcnow()
+            now = utcnow()
             last_time = self.last_alerts.get(alert["type"])
             if not last_time or (now - last_time).total_seconds() > 3600:
                 self.last_alerts[alert["type"]] = now

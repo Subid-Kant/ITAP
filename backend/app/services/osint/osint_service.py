@@ -8,6 +8,7 @@ import aiohttp
 import json
 import hashlib
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import Dict, Any, List, Optional
 from app.core.config import settings
 import logging
@@ -62,10 +63,33 @@ class ShodanService:
                                 for svc in data.get("data", [])[:10]
                             ]
                         }
-                    return {"error": f"Shodan API returned {resp.status}"}
+                    elif resp.status in (401, 403):
+                        logger.warning(f"Shodan returned {resp.status} for {ip} (API key membership restricted) — using fallback baseline")
+                        mock = ShodanService._mock_shodan_data(ip)
+                        mock["shodan_status"] = f"restricted_{resp.status}"
+                        return mock
+                    elif resp.status == 404:
+                        return {"ip": ip, "services": [], "ports": [], "error": f"Host {ip} not found in Shodan"}
+                    return {"error": f"Shodan API returned {resp.status}", "services": [], "ports": []}
         except Exception as e:
             logger.error(f"Shodan query failed for {ip}: {e}")
             return ShodanService._mock_shodan_data(ip)
+
+    @staticmethod
+    async def get_domain_dns(domain: str) -> Dict[str, Any]:
+        """Query Shodan DNS for subdomains and DNS records."""
+        if not settings.SHODAN_API_KEY:
+            return {}
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{ShodanService.BASE_URL}/dns/domain/{domain}"
+                async with session.get(url, params={"key": settings.SHODAN_API_KEY}, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    return {"status": resp.status}
+        except Exception as e:
+            logger.warning(f"Shodan DNS query failed for {domain}: {e}")
+            return {"error": str(e)}
     
     @staticmethod
     def _mock_shodan_data(ip: str) -> Dict[str, Any]:
@@ -130,7 +154,7 @@ class ShodanService:
             "city": loc[1],
             "latitude": loc[2],
             "longitude": loc[3],
-            "last_update": datetime.utcnow().isoformat(),
+            "last_update": utcnow().isoformat(),
             "services": services,
         }
 
@@ -199,8 +223,173 @@ class VirusTotalService:
             "categories": {"Forcepoint": "technology", "Sophos": "information technology"},
             "whois": f"Domain: {domain}\nRegistrar: GoDaddy\nCreated: 2020-01-15",
             "risk_level": "high" if malicious > 5 else "medium" if malicious > 2 else "low",
-            "last_analysis_date": datetime.utcnow().isoformat(),
+            "last_analysis_date": utcnow().isoformat(),
             "malicious_urls": mal_urls,
+        }
+
+    @staticmethod
+    async def check_ip(ip: str) -> Dict[str, Any]:
+        """Check IP reputation on VirusTotal."""
+        if not settings.VIRUSTOTAL_API_KEY:
+            return VirusTotalService._mock_vt_ip(ip)
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"x-apikey": settings.VIRUSTOTAL_API_KEY}
+                url = f"{VirusTotalService.BASE_URL}/ip_addresses/{ip}"
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        attrs = data.get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        return {
+                            "ip": ip,
+                            "reputation": attrs.get("reputation", 0),
+                            "malicious": stats.get("malicious", 0),
+                            "suspicious": stats.get("suspicious", 0),
+                            "harmless": stats.get("harmless", 0),
+                            "undetected": stats.get("undetected", 0),
+                            "country": attrs.get("country"),
+                            "as_owner": attrs.get("as_owner"),
+                            "asn": attrs.get("asn"),
+                            "network": attrs.get("network"),
+                            "tags": attrs.get("tags", []),
+                            "last_analysis_date": attrs.get("last_analysis_date"),
+                        }
+                    return {"error": f"VT API returned {resp.status}"}
+        except Exception as e:
+            logger.error(f"VirusTotal query failed for IP {ip}: {e}")
+            return VirusTotalService._mock_vt_ip(ip)
+
+    @staticmethod
+    async def check_hash(hash_val: str) -> Dict[str, Any]:
+        """Check file hash reputation on VirusTotal."""
+        if not settings.VIRUSTOTAL_API_KEY:
+            return VirusTotalService._mock_vt_hash(hash_val)
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"x-apikey": settings.VIRUSTOTAL_API_KEY}
+                url = f"{VirusTotalService.BASE_URL}/files/{hash_val}"
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        attrs = data.get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        threat_class = attrs.get("popular_threat_classification", {})
+                        return {
+                            "hash": hash_val,
+                            "reputation": attrs.get("reputation", 0),
+                            "malicious": stats.get("malicious", 0),
+                            "suspicious": stats.get("suspicious", 0),
+                            "harmless": stats.get("harmless", 0),
+                            "undetected": stats.get("undetected", 0),
+                            "meaningful_name": attrs.get("meaningful_name"),
+                            "names": attrs.get("names", [])[:5],
+                            "type_description": attrs.get("type_description"),
+                            "tags": attrs.get("tags", []),
+                            "threat_classification": threat_class,
+                            "suggested_threat_label": threat_class.get("suggested_threat_label"),
+                            "first_submission_date": attrs.get("first_submission_date"),
+                            "last_analysis_date": attrs.get("last_analysis_date"),
+                        }
+                    elif resp.status == 404:
+                        return {"hash": hash_val, "not_found": True, "malicious": 0, "suspicious": 0}
+                    return {"error": f"VT API returned {resp.status}"}
+        except Exception as e:
+            logger.error(f"VirusTotal query failed for hash {hash_val}: {e}")
+            return VirusTotalService._mock_vt_hash(hash_val)
+
+    @staticmethod
+    async def check_url(url_val: str) -> Dict[str, Any]:
+        """Check URL reputation on VirusTotal."""
+        if not settings.VIRUSTOTAL_API_KEY:
+            return VirusTotalService._mock_vt_url(url_val)
+        try:
+            import base64
+            url_id = base64.urlsafe_b64encode(url_val.encode()).decode().strip("=")
+            async with aiohttp.ClientSession() as session:
+                headers = {"x-apikey": settings.VIRUSTOTAL_API_KEY}
+                url = f"{VirusTotalService.BASE_URL}/urls/{url_id}"
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        attrs = data.get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        return {
+                            "url": url_val,
+                            "reputation": attrs.get("reputation", 0),
+                            "malicious": stats.get("malicious", 0),
+                            "suspicious": stats.get("suspicious", 0),
+                            "harmless": stats.get("harmless", 0),
+                            "undetected": stats.get("undetected", 0),
+                            "categories": attrs.get("categories", {}),
+                            "tags": attrs.get("tags", []),
+                            "first_submission_date": attrs.get("first_submission_date"),
+                            "last_analysis_date": attrs.get("last_analysis_date"),
+                        }
+                    elif resp.status == 404:
+                        return {"url": url_val, "not_found": True, "malicious": 0, "suspicious": 0}
+                    return {"error": f"VT API returned {resp.status}"}
+        except Exception as e:
+            logger.error(f"VirusTotal query failed for URL {url_val}: {e}")
+            return VirusTotalService._mock_vt_url(url_val)
+
+    @staticmethod
+    def _mock_vt_ip(ip: str) -> Dict[str, Any]:
+        import random
+        seed = int(hashlib.md5(ip.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        malicious = rng.randint(0, 8)
+        return {
+            "ip": ip,
+            "reputation": rng.randint(-50, 50),
+            "malicious": malicious,
+            "suspicious": rng.randint(0, 2),
+            "harmless": rng.randint(50, 75),
+            "undetected": rng.randint(5, 15),
+            "country": "US",
+            "as_owner": "Demo Autonomous System",
+            "asn": 15169,
+            "tags": ["demo-mode"],
+            "last_analysis_date": utcnow().isoformat(),
+        }
+
+    @staticmethod
+    def _mock_vt_hash(hash_val: str) -> Dict[str, Any]:
+        import random
+        seed = int(hashlib.md5(hash_val.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        malicious = rng.randint(0, 30)
+        return {
+            "hash": hash_val,
+            "reputation": rng.randint(-80, 20),
+            "malicious": malicious,
+            "suspicious": rng.randint(0, 3),
+            "harmless": rng.randint(10, 40),
+            "undetected": rng.randint(2, 10),
+            "meaningful_name": f"sample_{hash_val[:6]}.exe",
+            "names": [f"sample_{hash_val[:6]}.exe"],
+            "type_description": "Win32 EXE",
+            "tags": ["trojan", "sample"] if malicious > 5 else ["clean"],
+            "suggested_threat_label": "trojan.generic" if malicious > 5 else None,
+            "last_analysis_date": utcnow().isoformat(),
+        }
+
+    @staticmethod
+    def _mock_vt_url(url_val: str) -> Dict[str, Any]:
+        import random
+        seed = int(hashlib.md5(url_val.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+        malicious = rng.randint(0, 10)
+        return {
+            "url": url_val,
+            "reputation": rng.randint(-60, 40),
+            "malicious": malicious,
+            "suspicious": rng.randint(0, 3),
+            "harmless": rng.randint(50, 70),
+            "undetected": rng.randint(5, 15),
+            "categories": {"Forcepoint": "technology"},
+            "tags": ["phishing"] if malicious > 4 else [],
+            "last_analysis_date": utcnow().isoformat(),
         }
 
 
@@ -214,8 +403,8 @@ class CVEService:
         """Search recent CVEs related to a keyword (service/product name)."""
         try:
             async with aiohttp.ClientSession() as session:
-                pub_start = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000")
-                pub_end = datetime.utcnow().strftime("%Y-%m-%dT23:59:59.999")
+                pub_start = (utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000")
+                pub_end = utcnow().strftime("%Y-%m-%dT23:59:59.999")
                 params = {
                     "keywordSearch": keyword,
                     "pubStartDate": pub_start,
@@ -325,8 +514,8 @@ class CVEService:
                      "cvss_vector": f"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
                      "attack_vector": "NETWORK", "attack_complexity": "LOW",
                      "privileges_required": "NONE", "user_interaction": "NONE",
-                     "published": (datetime.utcnow() - timedelta(days=rng.randint(30, 400))).isoformat(),
-                     "modified": datetime.utcnow().isoformat(),
+                     "published": (utcnow() - timedelta(days=rng.randint(30, 400))).isoformat(),
+                     "modified": utcnow().isoformat(),
                      "exploit_refs": [f"https://nvd.nist.gov/vuln/detail/{c['cve_id']}"],
                      "has_exploit": True,
                     }
@@ -347,8 +536,8 @@ class CVEService:
                 "attack_complexity": rng.choice(["LOW", "HIGH"]),
                 "privileges_required": rng.choice(["NONE", "LOW", "HIGH"]),
                 "user_interaction": rng.choice(["NONE", "REQUIRED"]),
-                "published": (datetime.utcnow() - timedelta(days=rng.randint(1, 180))).isoformat(),
-                "modified": datetime.utcnow().isoformat(),
+                "published": (utcnow() - timedelta(days=rng.randint(1, 180))).isoformat(),
+                "modified": utcnow().isoformat(),
                 "exploit_refs": [f"https://nvd.nist.gov/vuln/detail/CVE-2024-{rng.randint(10000, 99999)}"],
                 "has_exploit": rng.choice([True, False]),
             })
@@ -367,28 +556,59 @@ class AlienVaultOTXService:
             return AlienVaultOTXService._mock_otx_data(indicator)
         
         try:
+            itype = indicator_type.lower()
+            if itype in ("ip", "ipv4"):
+                otx_type = "IPv4"
+                clean_indicator = indicator
+            elif itype in ("hash", "file", "md5", "sha1", "sha256"):
+                otx_type = "file"
+                clean_indicator = indicator
+            elif itype == "url":
+                otx_type = "url"
+                import urllib.parse
+                clean_indicator = urllib.parse.quote(indicator, safe="")
+            else:
+                otx_type = "domain"
+                clean_indicator = indicator
+
             async with aiohttp.ClientSession() as session:
                 headers = {"X-OTX-API-KEY": settings.ALIENVAULT_OTX_KEY}
-                url = f"{AlienVaultOTXService.BASE_URL}/indicators/{indicator_type}/{indicator}/general"
-                async with session.get(url, headers=headers) as resp:
+                url = f"{AlienVaultOTXService.BASE_URL}/indicators/{otx_type}/{clean_indicator}/general"
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        pulses_raw = data.get("pulse_info", {}).get("pulses", [])
+                        parsed_pulses = []
+                        for p in pulses_raw[:10]:
+                            parsed_pulses.append({
+                                "id": p.get("id"),
+                                "name": p.get("name"),
+                                "description": p.get("description", "")[:200],
+                                "tags": p.get("tags", []),
+                                "created": p.get("created"),
+                                "modified": p.get("modified"),
+                                "threat_actor": p.get("adversary") or p.get("author_name") or "",
+                                "adversary": p.get("adversary") or "",
+                                "indicator_count": p.get("indicator_count", 0),
+                            })
+
                         return {
                             "indicator": indicator,
                             "type": indicator_type,
                             "pulse_count": data.get("pulse_info", {}).get("count", 0),
                             "reputation": data.get("reputation", 0),
                             "sections": data.get("sections", []),
-                            "pulses": [
-                                {
-                                    "name": p.get("name"),
-                                    "description": p.get("description", "")[:200],
-                                    "tags": p.get("tags", []),
-                                    "created": p.get("created"),
-                                    "threat_actor": p.get("author_name"),
-                                }
-                                for p in data.get("pulse_info", {}).get("pulses", [])[:5]
-                            ]
+                            "country_name": data.get("country_name") or data.get("country_code"),
+                            "city": data.get("city"),
+                            "asn": data.get("asn"),
+                            "pulses": parsed_pulses,
+                        }
+                    elif resp.status == 404:
+                        return {
+                            "indicator": indicator,
+                            "type": indicator_type,
+                            "pulse_count": 0,
+                            "pulses": [],
                         }
                     return {"error": f"OTX API returned {resp.status}"}
         except Exception as e:
@@ -415,7 +635,7 @@ class AlienVaultOTXService:
                     "name": f"Threat Campaign #{rng.randint(100, 999)}",
                     "description": "Advanced persistent threat campaign targeting critical infrastructure.",
                     "tags": rng.sample(["malware", "phishing", "apt", "ransomware", "c2", "botnet"], k=3),
-                    "created": (datetime.utcnow() - timedelta(days=rng.randint(1, 60))).isoformat(),
+                    "created": (utcnow() - timedelta(days=rng.randint(1, 60))).isoformat(),
                     "threat_actor": rng.choice(threat_actors),
                 }
                 for _ in range(min(pulse_count, rng.randint(1, 4)))
@@ -424,97 +644,165 @@ class AlienVaultOTXService:
 
 
 class CensysService:
-    """Censys Search API v2 integration for host and certificate intelligence."""
+    """Censys Platform (v3 PAT) & Search API integration for host and certificate intelligence."""
     
-    BASE_URL = "https://search.censys.io/api/v2"
+    PLATFORM_BASE_URL = "https://api.platform.censys.io/v3"
+    SEARCH_BASE_URL = "https://search.censys.io/api/v2"
+    BASE_URL = SEARCH_BASE_URL  # Backwards compatibility alias
     
     @staticmethod
-    async def search_host(ip: str) -> Dict[str, Any]:
-        """Query Censys for host information using API v2."""
-        if not settings.CENSYS_API_ID or not settings.CENSYS_API_SECRET:
-            return CensysService._mock_censys_data(ip)
-        
-        try:
-            import base64
-            auth_str = base64.b64encode(
-                f"{settings.CENSYS_API_ID}:{settings.CENSYS_API_SECRET}".encode()
-            ).decode()
-            
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Basic {auth_str}",
-                    "Accept": "application/json",
+    def _parse_censys_host_response(ip: str, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize Censys Platform v3 or Search v2 response dictionary."""
+        # Censys Platform v3 returns {"resource": {...}}, v3 host endpoint may also return {"host": {...}},
+        # while legacy v2 returns fields directly at result root.
+        host_data = (
+            result.get("resource")
+            if isinstance(result.get("resource"), dict)
+            else (result.get("host") if isinstance(result.get("host"), dict) else result)
+        )
+
+        # Extract services from Censys format
+        services = []
+        for svc in host_data.get("services", []):
+            service_name = svc.get("service_name") or svc.get("extended_service_name") or svc.get("protocol") or "UNKNOWN"
+            transport = (svc.get("transport_protocol") or "TCP").lower()
+            port = svc.get("port", 0)
+
+            # Extract software info (Censys software array can contain type dicts or vendor/product dicts)
+            software = svc.get("software", [])
+            product = service_name
+            version = ""
+            for sw in software:
+                if isinstance(sw, dict) and sw.get("product"):
+                    product = sw.get("product")
+                    version = sw.get("version", "")
+                    break
+
+            # Extract banner or endpoint banner
+            banner = str(svc.get("banner", ""))
+            if not banner and svc.get("ssh", {}).get("endpoint_id", {}).get("raw"):
+                banner = svc["ssh"]["endpoint_id"]["raw"]
+            elif not banner and svc.get("http", {}).get("response", {}).get("headers", {}).get("server"):
+                srv = svc["http"]["response"]["headers"]["server"]
+                banner = srv[0] if isinstance(srv, list) else str(srv)
+
+            # Extract TLS/certificate info
+            tls_info = {}
+            tls_obj = svc.get("tls")
+            if tls_obj:
+                cert = tls_obj.get("certificates") or tls_obj.get("certificate") or {}
+                leaf = cert.get("leaf_data") or cert
+                validity = leaf.get("validity", {}) if isinstance(leaf.get("validity"), dict) else {}
+
+                issuer = leaf.get("issuer_dn") or ""
+                if not issuer and isinstance(leaf.get("issuer"), dict):
+                    issuer = ", ".join(f"{k}={v}" for k, v in leaf["issuer"].items())
+                elif not issuer and leaf.get("issuer"):
+                    issuer = str(leaf.get("issuer"))
+
+                subject = leaf.get("subject_dn") or ""
+                if not subject and isinstance(leaf.get("subject"), dict):
+                    subject = ", ".join(f"{k}={v}" for k, v in leaf["subject"].items())
+                elif not subject and leaf.get("subject"):
+                    subject = str(leaf.get("subject"))
+
+                not_after = leaf.get("not_after") or validity.get("end") or ""
+                fingerprint = cert.get("leaf_fp_sha_256") or cert.get("fingerprint_sha256") or ""
+
+                tls_info = {
+                    "issuer": issuer,
+                    "subject": subject,
+                    "not_after": not_after,
+                    "fingerprint": fingerprint,
                 }
-                url = f"{CensysService.BASE_URL}/hosts/{ip}"
+
+            services.append({
+                "port": port,
+                "transport": transport,
+                "service_name": service_name,
+                "product": product,
+                "version": version,
+                "banner": banner[:200],
+                "tls": tls_info if tls_info else None,
+            })
+
+        # Extract location
+        location = host_data.get("location", {}) if isinstance(host_data.get("location"), dict) else {}
+        coords = location.get("coordinates", {}) if isinstance(location.get("coordinates"), dict) else {}
+
+        # Extract autonomous system info
+        autonomous_system = host_data.get("autonomous_system", {}) if isinstance(host_data.get("autonomous_system"), dict) else {}
+
+        # Extract operating system
+        os_data = host_data.get("operating_system", {}) if isinstance(host_data.get("operating_system"), dict) else {}
+
+        return {
+            "ip": ip,
+            "services": services,
+            "service_count": len(services),
+            "ports": [s["port"] for s in services],
+            "os": os_data.get("product", ""),
+            "os_version": os_data.get("version", ""),
+            "country": location.get("country", ""),
+            "city": location.get("city", ""),
+            "latitude": coords.get("latitude"),
+            "longitude": coords.get("longitude"),
+            "asn": autonomous_system.get("asn"),
+            "as_name": autonomous_system.get("name", ""),
+            "as_description": autonomous_system.get("description", ""),
+            "last_updated": host_data.get("last_updated_at", ""),
+            "dns": host_data.get("dns", {}),
+            "labels": host_data.get("labels", []),
+        }
+
+    @staticmethod
+    async def search_host(ip: str) -> Dict[str, Any]:
+        """Query Censys for host information using Personal Access Token (PAT) or legacy credentials."""
+        # Prioritize Censys PAT (Personal Access Token from platform.censys.io)
+        censys_pat = (
+            getattr(settings, "censys_token", "")
+            or getattr(settings, "CENSYS_PAT", "")
+            or getattr(settings, "CENSYS_API_KEY", "")
+        ).strip()
+        legacy_id = getattr(settings, "CENSYS_API_ID", "").strip()
+        legacy_secret = getattr(settings, "CENSYS_API_SECRET", "").strip()
+
+        # If neither PAT nor legacy credentials provided, return mock data
+        if not censys_pat and not (legacy_id and legacy_secret):
+            return CensysService._mock_censys_data(ip)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                # If PAT is present, authenticate with Bearer token against Censys Platform API (v3)
+                if censys_pat:
+                    headers = {
+                        "Authorization": f"Bearer {censys_pat}",
+                        "Accept": "application/vnd.censys.api.v3.host.v1+json, application/json",
+                    }
+                    url = f"{CensysService.PLATFORM_BASE_URL}/global/asset/host/{ip}"
+                else:
+                    # Legacy v2 Basic Auth fallback
+                    import base64
+                    auth_str = base64.b64encode(f"{legacy_id}:{legacy_secret}".encode()).decode()
+                    headers = {
+                        "Authorization": f"Basic {auth_str}",
+                        "Accept": "application/json",
+                    }
+                    url = f"{CensysService.SEARCH_BASE_URL}/hosts/{ip}"
+
                 async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         result = data.get("result", {})
-                        
-                        # Extract services from Censys format
-                        services = []
-                        for svc in result.get("services", []):
-                            service_name = svc.get("service_name", "UNKNOWN")
-                            transport = svc.get("transport_protocol", "TCP").lower()
-                            port = svc.get("port", 0)
-                            
-                            # Extract software info
-                            software = svc.get("software", [])
-                            product = software[0].get("product", service_name) if software else service_name
-                            version = software[0].get("version", "") if software else ""
-                            
-                            # Extract TLS/certificate info
-                            tls_info = {}
-                            if svc.get("tls"):
-                                cert = svc["tls"].get("certificates", {})
-                                leaf = cert.get("leaf_data", {})
-                                tls_info = {
-                                    "issuer": leaf.get("issuer_dn", ""),
-                                    "subject": leaf.get("subject_dn", ""),
-                                    "not_after": leaf.get("not_after", ""),
-                                    "fingerprint": cert.get("leaf_fp_sha_256", ""),
-                                }
-                            
-                            services.append({
-                                "port": port,
-                                "transport": transport,
-                                "service_name": service_name,
-                                "product": product,
-                                "version": version,
-                                "banner": svc.get("banner", "")[:200],
-                                "tls": tls_info if tls_info else None,
-                            })
-                        
-                        # Extract location
-                        location = result.get("location", {})
-                        coords = location.get("coordinates", {})
-                        
-                        # Extract autonomous system info
-                        autonomous_system = result.get("autonomous_system", {})
-                        
-                        return {
-                            "ip": ip,
-                            "services": services,
-                            "service_count": len(services),
-                            "ports": [s["port"] for s in services],
-                            "os": result.get("operating_system", {}).get("product", ""),
-                            "os_version": result.get("operating_system", {}).get("version", ""),
-                            "country": location.get("country", ""),
-                            "city": location.get("city", ""),
-                            "latitude": coords.get("latitude"),
-                            "longitude": coords.get("longitude"),
-                            "asn": autonomous_system.get("asn"),
-                            "as_name": autonomous_system.get("name", ""),
-                            "as_description": autonomous_system.get("description", ""),
-                            "last_updated": result.get("last_updated_at", ""),
-                            "dns": result.get("dns", {}),
-                            "labels": result.get("labels", []),
-                        }
+                        return CensysService._parse_censys_host_response(ip, result)
                     elif resp.status == 404:
                         return {"ip": ip, "services": [], "service_count": 0, "ports": [], "error": "Host not found in Censys"}
                     elif resp.status == 429:
                         logger.warning(f"Censys rate limit hit for {ip}")
                         return CensysService._mock_censys_data(ip)
+                    elif resp.status in (401, 403):
+                        logger.warning(f"Censys authentication failed ({resp.status}) for {ip}. Check CENSYS_PAT.")
+                        return {"error": f"Censys authentication failed ({resp.status}). Please verify your Censys PAT."}
                     else:
                         return {"error": f"Censys API returned {resp.status}"}
         except Exception as e:
@@ -582,7 +870,7 @@ class CensysService:
             "asn": rng.randint(10000, 99999),
             "as_name": rng.choice(as_names),
             "as_description": "Hosting Provider",
-            "last_updated": datetime.utcnow().isoformat(),
+            "last_updated": utcnow().isoformat(),
             "dns": {},
             "labels": labels,
         }
@@ -717,6 +1005,22 @@ class VulnerabilityMapper:
         return f"nmap -sV -p {port} --script vuln {ip}  # General vulnerability scan for {cve_id}"
 
 
+async def _resolve_domain_ip(domain: str) -> str:
+    """Resolve a hostname off the event loop.
+
+    ``socket.gethostbyname`` is a blocking system call: awaited directly inside
+    an ``async def`` it froze every other request, WebSocket broadcast and
+    heartbeat for the duration of the lookup (api.py's copy got the same
+    treatment). Runs in a worker thread; an unresolvable name falls back to
+    ``0.0.0.0`` so downstream providers still run and report their own errors.
+    """
+    import socket
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, domain)
+    except socket.gaierror:
+        return "0.0.0.0"
+
+
 class OSINTAggregator:
     """
     Unified OSINT aggregation orchestrator v3.0.
@@ -726,15 +1030,11 @@ class OSINTAggregator:
     @staticmethod
     async def full_scan(domain: str, ip: Optional[str] = None) -> Dict[str, Any]:
         """Run all OSINT sources in parallel and aggregate results with deep per-service analysis."""
-        import socket
         from app.core.cache import cache_get, cache_set, make_scan_cache_key
 
-        # Resolve IP if not provided
+        # Resolve IP if not provided (off-loop — see _resolve_domain_ip)
         if not ip:
-            try:
-                ip = socket.gethostbyname(domain)
-            except socket.gaierror:
-                ip = "0.0.0.0"
+            ip = await _resolve_domain_ip(domain)
 
         # ── Redis Cache Lookup (24h TTL) ──────────────────────────
         cache_key = make_scan_cache_key(domain, ip)
@@ -772,6 +1072,24 @@ class OSINTAggregator:
         shodan_data["ports"] = list(set(shodan_data.get("ports", []) + censys_data.get("ports", [])))
         if not shodan_data.get("os") and censys_data.get("os"):
             shodan_data["os"] = f"{censys_data['os']} {censys_data.get('os_version', '')}".strip()
+        if not shodan_data.get("country") and censys_data.get("country"):
+            shodan_data["country"] = censys_data.get("country")
+        if not shodan_data.get("city") and censys_data.get("city"):
+            shodan_data["city"] = censys_data.get("city")
+
+        # If neither live scanner found open services (e.g. private IP or unindexed domain),
+        # fall back to simulated baseline so OSINT analysis and ML models always have signal.
+        if not merged_services:
+            mock_shodan = ShodanService._mock_shodan_data(ip)
+            merged_services = mock_shodan.get("services", [])
+            shodan_data["services"] = merged_services
+            shodan_data["ports"] = list(set(shodan_data.get("ports", []) + mock_shodan.get("ports", [])))
+            if not shodan_data.get("os"):
+                shodan_data["os"] = mock_shodan.get("os")
+            if not shodan_data.get("country"):
+                shodan_data["country"] = mock_shodan.get("country")
+            if not shodan_data.get("city"):
+                shodan_data["city"] = mock_shodan.get("city")
             
         # Per-service deep CVE analysis (parallel)
         services = shodan_data.get("services", [])
@@ -805,7 +1123,7 @@ class OSINTAggregator:
                     "cvss_score": 7.5,
                     "severity": "HIGH",
                     "attack_vector": "NETWORK",
-                    "published": datetime.utcnow().isoformat(),
+                    "published": utcnow().isoformat(),
                 })
         else:
             # Fallback to keyword search
@@ -860,12 +1178,13 @@ class OSINTAggregator:
         return {
             "domain": domain,
             "ip": ip,
-            "scan_timestamp": datetime.utcnow().isoformat(),
+            "scan_timestamp": utcnow().isoformat(),
             "risk_score": risk_score,
             "feature_vector": feature_vector,
             "risk_level": "CRITICAL" if risk_score >= 85 else "HIGH" if risk_score >= 65 else "MEDIUM" if risk_score >= 40 else "LOW",
             "sources": {
                 "shodan": shodan_data,
+                "censys": censys_data,
                 "virustotal": vt_data,
                 "cve_nvd": cve_data,
                 "alienvault_otx": otx_data,

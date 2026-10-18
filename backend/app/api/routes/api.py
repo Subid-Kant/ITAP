@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, update
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import List, Optional, Dict, Any
 import asyncio
 import ipaddress
@@ -276,7 +277,7 @@ async def create_target(
     existing = await db.execute(select(Target).where(Target.domain == target.domain))
     existing_target = existing.scalar_one_or_none()
     if existing_target:
-        existing_target.updated_at = datetime.utcnow()
+        existing_target.updated_at = utcnow()
         if target.ip_address:
             existing_target.ip_address = target.ip_address
         if target.organization:
@@ -468,9 +469,16 @@ async def run_osint_scan(
     else:
         scan_type_label = "full_osint"
 
-    # Dynamically map ports and vulnerabilities based on scan type
-    mapped_ports = osint_results.get("sources", {}).get("shodan", {}).get("ports", [])
-    mapped_vulns = osint_results.get("sources", {}).get("shodan", {}).get("vulns", [])
+    # Dynamically map ports and vulnerabilities from all active OSINT sources (Shodan, Censys, services)
+    mapped_ports = list(set(
+        osint_results.get("sources", {}).get("shodan", {}).get("ports", [])
+        + osint_results.get("sources", {}).get("censys", {}).get("ports", [])
+        + [s.get("port") for s in osint_results.get("vulnerabilities_by_service", []) if s.get("port")]
+    ))
+    mapped_vulns = list(set(
+        osint_results.get("sources", {}).get("shodan", {}).get("vulns", [])
+        + [c.get("cve_id") for s in osint_results.get("vulnerabilities_by_service", []) for c in s.get("cves", []) if c.get("cve_id")]
+    ))
 
     if nmap_enabled and osint_results.get("nmap", {}).get("status") == "completed":
         # Hybrid scan: merge Nmap and OSINT data
@@ -508,8 +516,8 @@ async def run_osint_scan(
         scan.open_ports = mapped_ports
         scan.vulnerabilities = mapped_vulns
         scan.reputation_score = osint_results.get("risk_score")
-        scan.completed_at = datetime.utcnow()
-        scan.started_at = datetime.utcnow()  # Update started_at to reflect latest scan time
+        scan.completed_at = utcnow()
+        scan.started_at = utcnow()  # Update started_at to reflect latest scan time
     else:
         scan = Scan(
             id=str(uuid.uuid4()),
@@ -520,8 +528,8 @@ async def run_osint_scan(
             open_ports=mapped_ports,
             vulnerabilities=mapped_vulns,
             reputation_score=osint_results.get("risk_score"),
-            completed_at=datetime.utcnow(),
-            started_at=datetime.utcnow()
+            completed_at=utcnow(),
+            started_at=utcnow()
         )
         db.add(scan)
 
@@ -739,8 +747,11 @@ async def run_osint_scan(
     from app.services.ml.ml_engine import MODELS_LOADED
     try:
         from app.services.ml.ml_engine import lstm_killchain_engine, ae_engine
-        lstm_mocked = getattr(lstm_killchain_engine, 'is_mocked', False)
-        ae_mocked = getattr(ae_engine, 'is_mocked', False)
+        # A None engine (artifact never deployed) counts as mocked: the old
+        # `getattr(engine, 'is_mocked', False)` default claimed "real weights"
+        # for an engine that does not exist.
+        lstm_mocked = lstm_killchain_engine is None or getattr(lstm_killchain_engine, 'is_mocked', True)
+        ae_mocked = ae_engine is None or getattr(ae_engine, 'is_mocked', True)
     except ImportError:
         lstm_mocked = True
         ae_mocked = True
@@ -845,7 +856,7 @@ async def run_nmap_scan(
         results=nmap_results,
         open_ports=nmap_results.get("open_ports", []),
         vulnerabilities=[v.get("description", "")[:200] for v in nmap_results.get("vulnerabilities", [])],
-        completed_at=datetime.utcnow(),
+        completed_at=utcnow(),
     )
     db.add(scan)
     await db.commit()
@@ -1023,7 +1034,7 @@ async def detect_anomalies(
         "evidence_basis": results.get("evidence_basis", "autoencoder_simulation"),
         "anomalies": anomalies,
         "model_version": "Llama 3 8B (LoRA)",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
     }
 
 
@@ -1121,7 +1132,7 @@ async def resolve_threat(
     if not threat:
         raise HTTPException(status_code=404, detail="Threat not found")
     threat.is_resolved = True
-    threat.resolved_at = datetime.utcnow()
+    threat.resolved_at = utcnow()
     await db.commit()
     await ws_manager.broadcast_system_event(
         "info", f"Threat resolved: {threat.title}",
@@ -1199,7 +1210,7 @@ async def enrich_ioc(
     current_user: dict = Depends(check_admin_role),
 ):
     """Enrich an IOC with cross-source intelligence."""
-    return IOCEnricher.enrich_ioc(indicator, indicator_type)
+    return await IOCEnricher.enrich_ioc(indicator, indicator_type)
 
 
 @router.post("/threat-intel/ioc-bulk", tags=["Threat Intelligence"])
@@ -1218,12 +1229,12 @@ async def bulk_ioc_search(
         indicator = item.get("indicator", "").strip()
         ioc_type = item.get("type", "domain")
         if indicator:
-            enriched = IOCEnricher.enrich_ioc(indicator, ioc_type)
+            enriched = await IOCEnricher.enrich_ioc(indicator, ioc_type)
             results.append(enriched)
     return {
         "total": len(results),
         "results": results,
-        "processed_at": datetime.utcnow().isoformat(),
+        "processed_at": utcnow().isoformat(),
     }
 
 
@@ -1330,7 +1341,7 @@ async def update_incident_status(
         raise HTTPException(status_code=404, detail="Incident not found")
 
     incident.status = DBIncidentStatus(new_status)
-    now = datetime.utcnow()
+    now = utcnow()
     if new_status == "investigating":
         incident.acknowledged_at = now
     elif new_status == "contained":
@@ -1585,7 +1596,7 @@ async def get_dashboard_stats(
             for i in recent_incidents
         ],
         "mitre_attack_coverage": mitre_coverage,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
     }
 
 
@@ -1596,7 +1607,7 @@ async def get_threat_timeline(
     current_user: dict = Depends(get_current_user),
 ):
     """Get threat timeline data for the last N days."""
-    since = datetime.utcnow() - timedelta(days=days)
+    since = utcnow() - timedelta(days=days)
     result = await db.execute(
         select(Threat).where(Threat.detected_at >= since).order_by(Threat.detected_at.asc())
     )
@@ -1631,7 +1642,7 @@ async def get_advanced_metrics(
     )).scalar() or 0
 
     # Threat velocity: threats in last 24h vs previous 24h
-    now = datetime.utcnow()
+    now = utcnow()
     last_24h = (await db.execute(
         select(func.count(Threat.id)).where(Threat.detected_at >= now - timedelta(hours=24))
     )).scalar() or 0
@@ -1695,7 +1706,7 @@ async def generate_report(
     Generate an executive security report.
     Returns JSON summary or plain-text report.
     """
-    now = datetime.utcnow()
+    now = utcnow()
     since = now - timedelta(days=days)
 
     threats_result = await db.execute(
@@ -2025,7 +2036,7 @@ async def soar_block_ip(
         rule.rule_id = f"ITAP-{uuid.uuid4().hex[:8].upper()}"
         rule.reason = request.reason
         rule.blocked_by = current_user.get("sub", "admin")
-        rule.blocked_at = datetime.utcnow()
+        rule.blocked_at = utcnow()
         rule.released_at = None
         rule.status = "active"
         rule.threat_id = request.threat_id
@@ -2036,7 +2047,7 @@ async def soar_block_ip(
             rule_id=f"ITAP-{uuid.uuid4().hex[:8].upper()}",
             reason=request.reason,
             blocked_by=current_user.get("sub", "admin"),
-            blocked_at=datetime.utcnow(),
+            blocked_at=utcnow(),
             status="active",
             threat_id=request.threat_id,
         )
@@ -2047,7 +2058,7 @@ async def soar_block_ip(
         threat = (await db.execute(select(Threat).where(Threat.id == request.threat_id))).scalar_one_or_none()
         if threat:
             threat.is_resolved = True
-            threat.resolved_at = datetime.utcnow()
+            threat.resolved_at = utcnow()
 
     await db.commit()
     await db.refresh(rule)
@@ -2115,7 +2126,7 @@ async def soar_unblock_ip(
 
     rule_id = rule.rule_id
     rule.status = "released"
-    rule.released_at = datetime.utcnow()
+    rule.released_at = utcnow()
     await db.commit()
 
     await record_audit(

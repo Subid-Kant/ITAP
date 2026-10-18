@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Activity, AlertTriangle, Target, Brain, Eye, LayoutDashboard, Crosshair, BookOpen, Bell, Map, Grid3X3, Search, FileText, LogOut, User, ChevronLeft, ChevronRight, Wifi, Settings } from 'lucide-react';
+import { Shield, Activity, AlertTriangle, Target, Brain, Eye, LayoutDashboard, Crosshair, BookOpen, Bell, Map, Grid3X3, Search, FileText, LogOut, User, ChevronLeft, ChevronRight, Wifi, Settings, ScrollText } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { motion } from 'framer-motion';
 import AnimatedButton from './ui/AnimatedButton';
@@ -24,6 +24,7 @@ const NAV_ITEMS = [
   { id: 'reports', label: 'Reports', icon: FileText },
   { section: 'System' },
   { id: 'history', label: 'History', icon: FileText },
+  { id: 'audit', label: 'Audit Log', icon: ScrollText, adminOnly: true },
 ];
 
 export default function Sidebar({ activeView, setActiveView, stats, user, onLogout }) {
@@ -66,7 +67,9 @@ export default function Sidebar({ activeView, setActiveView, stats, user, onLogo
 
       {/* Nav */}
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item, i) =>
+        {NAV_ITEMS
+          .filter((item) => item.section || !item.adminOnly || user?.role === 'admin')
+          .map((item, i) =>
           item.section ? (
             !collapsed && <div key={i} className="nav-section-title">{item.section}</div>
           ) : (

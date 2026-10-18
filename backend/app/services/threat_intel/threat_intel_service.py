@@ -6,6 +6,7 @@ Threat DNA Fingerprinting, IOC Enrichment, and APT Actor Database.
 import hashlib
 import ipaddress
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import Dict, Any, List, Optional
 import logging
 
@@ -712,14 +713,19 @@ class ThreatDNAFingerprinter:
             "novelty_score": round(1 - top_match["similarity"], 4),
             "threat_family": top_match["pattern"],
             "behavioral_indicators": top_match["behavioral_indicators"],
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": utcnow().isoformat(),
         }
 
 
 class IOCEnricher:
-    """Cross-source IOC (Indicator of Compromise) enrichment with deterministic results."""
+    """Cross-source IOC (Indicator of Compromise) enrichment using live OSINT APIs.
 
-    # Deterministic threat tag assignment based on indicator hash
+    Queries VirusTotal, AlienVault OTX, Shodan, and Censys in parallel,
+    then aggregates the results into a unified enrichment response.
+    Falls back to deterministic mock data when API keys are not configured.
+    """
+
+    # Deterministic threat tag assignment based on indicator hash (fallback only)
     TAG_POOLS = {
         "ip": ["c2-server", "scanner", "botnet-node", "tor-exit", "vpn-node", "proxy", "brute-forcer", "malware-distributor"],
         "domain": ["phishing", "malware-hosting", "c2-domain", "typosquat", "newly-registered", "dga-domain", "parked"],
@@ -729,85 +735,250 @@ class IOCEnricher:
 
     THREAT_ACTORS = list(THREAT_ACTOR_DB.keys()) + ["Unknown Actor", "Cybercriminal Group"]
 
-    GEOIP_TABLE = {
-        # Deterministic fake ASN/geo data by hash range
-        "0": ("Russia", "Moscow", "AS197695 - reg.ru"),
-        "1": ("China", "Beijing", "AS4134 - CHINANET"),
-        "2": ("North Korea", "Pyongyang", "AS131279 - STAR-KP"),
-        "3": ("Iran", "Tehran", "AS197207 - MCCI"),
-        "4": ("United States", "New York", "AS14618 - AMAZON-AES"),
-        "5": ("Germany", "Frankfurt", "AS3320 - DTAG"),
-        "6": ("Netherlands", "Amsterdam", "AS60781 - LeaseWeb"),
-        "7": ("Ukraine", "Kyiv", "AS13249 - IT Systems"),
-        "8": ("Brazil", "São Paulo", "AS53006 - Algar Telecom"),
-        "9": ("India", "Mumbai", "AS45609 - Bharti Airtel"),
-    }
-
     @staticmethod
-    def enrich_ioc(indicator: str, indicator_type: str, osint_data: Dict = None) -> Dict[str, Any]:
-        """Enrich an IOC with cross-reference data. Deterministic per indicator."""
-        # Seed from indicator hash for reproducibility
-        h = hashlib.sha256(indicator.encode()).hexdigest()
-        hash_int = int(h[:8], 16)
+    async def enrich_ioc(indicator: str, indicator_type: str) -> Dict[str, Any]:
+        """Enrich an IOC with cross-source intelligence from live OSINT APIs."""
+        import asyncio
+        from app.services.osint.osint_service import (
+            VirusTotalService,
+            AlienVaultOTXService,
+            ShodanService,
+            CensysService,
+        )
 
         ioc_type = indicator_type.lower()
-        tag_pool = IOCEnricher.TAG_POOLS.get(ioc_type, IOCEnricher.TAG_POOLS["domain"])
-        tag_count = 2 + (hash_int % 3)
-        selected_tags = []
-        for i in range(tag_count):
-            selected_tags.append(tag_pool[(hash_int + i * 7) % len(tag_pool)])
+        tasks: Dict[str, Any] = {}
 
-        actor_count = hash_int % 2
-        actors = []
-        for i in range(actor_count + 1):
-            actors.append(IOCEnricher.THREAT_ACTORS[(hash_int + i * 13) % len(IOCEnricher.THREAT_ACTORS)])
+        # ── Dispatch parallel API calls per indicator type ──
+        if ioc_type == "ip":
+            tasks["virustotal"] = VirusTotalService.check_ip(indicator)
+            tasks["otx"] = AlienVaultOTXService.get_indicators(indicator, "ip")
+            tasks["shodan"] = ShodanService.search_host(indicator)
+            tasks["censys"] = CensysService.search_host(indicator)
+        elif ioc_type == "domain":
+            tasks["virustotal"] = VirusTotalService.check_domain(indicator)
+            tasks["otx"] = AlienVaultOTXService.get_indicators(indicator, "domain")
+        elif ioc_type == "hash":
+            tasks["virustotal"] = VirusTotalService.check_hash(indicator)
+            tasks["otx"] = AlienVaultOTXService.get_indicators(indicator, "hash")
+        elif ioc_type == "url":
+            tasks["virustotal"] = VirusTotalService.check_url(indicator)
+            tasks["otx"] = AlienVaultOTXService.get_indicators(indicator, "url")
+        else:
+            tasks["virustotal"] = VirusTotalService.check_domain(indicator)
+            tasks["otx"] = AlienVaultOTXService.get_indicators(indicator, "domain")
 
-        confidence = 0.50 + (hash_int % 50) / 100
-        sources_count = 1 + (hash_int % 8)
-        first_seen_days = 5 + (hash_int % 85)
+        # Run all API calls concurrently
+        keys = list(tasks.keys())
+        results_raw = await asyncio.gather(*[tasks[k] for k in keys], return_exceptions=True)
+        source_data: Dict[str, Any] = {}
+        for k, r in zip(keys, results_raw):
+            if isinstance(r, Exception):
+                logger.warning(f"IOC enrichment source {k} failed for {indicator}: {r}")
+                source_data[k] = {"error": str(r)}
+            else:
+                source_data[k] = r
 
+        # ── Aggregate: risk_score, confidence, tags ──
+        vt = source_data.get("virustotal", {})
+        otx = source_data.get("otx", {})
+        shodan = source_data.get("shodan", {})
+        censys = source_data.get("censys", {})
+
+        vt_malicious = vt.get("malicious", 0) or 0
+        vt_suspicious = vt.get("suspicious", 0) or 0
+        vt_total = vt_malicious + vt_suspicious + (vt.get("harmless", 0) or 0) + (vt.get("undetected", 0) or 0)
+        otx_pulse_count = otx.get("pulse_count", 0) or 0
+
+        # Count how many sources returned real data
+        sources_reporting = 0
+        source_names = []
+        if vt and not vt.get("error"):
+            sources_reporting += 1
+            source_names.append("VirusTotal")
+        if otx and not otx.get("error"):
+            sources_reporting += 1
+            source_names.append("AlienVault OTX")
+        if shodan and not shodan.get("error"):
+            sources_reporting += 1
+            source_names.append("Shodan")
+        if censys and not censys.get("error"):
+            sources_reporting += 1
+            source_names.append("Censys")
+
+        # Risk score: weighted combination of VT detections + OTX pulse count
+        risk_score = 0
+        if vt_total > 0:
+            vt_ratio = (vt_malicious + vt_suspicious * 0.5) / vt_total
+            risk_score += int(vt_ratio * 70)  # VT contributes up to 70
+        if otx_pulse_count > 0:
+            otx_factor = min(otx_pulse_count / 20, 1.0)
+            risk_score += int(otx_factor * 30)  # OTX contributes up to 30
+        risk_score = min(risk_score, 100)
+
+        # Confidence: based on how many sources responded
+        confidence = round(min(sources_reporting / 4.0, 1.0), 2)
+
+        # Tags: derive from real data
+        tags = set()
+        # VT tags
+        for t in vt.get("tags", []):
+            tags.add(t)
+        # VT threat label
+        if vt.get("suggested_threat_label"):
+            tags.add(vt["suggested_threat_label"])
+        # OTX pulse tags
+        for pulse in otx.get("pulses", []):
+            for t in pulse.get("tags", [])[:3]:
+                tags.add(t.lower())
+        # Shodan-derived tags
+        if shodan.get("ports"):
+            if 9001 in shodan["ports"] or 9050 in shodan["ports"]:
+                tags.add("tor")
+            if 6379 in shodan["ports"]:
+                tags.add("exposed-redis")
+            if 27017 in shodan["ports"]:
+                tags.add("exposed-mongodb")
+        if vt_malicious > 5:
+            tags.add("high-risk")
+        elif vt_malicious > 0:
+            tags.add("suspicious")
+        if otx_pulse_count > 10:
+            tags.add("widely-reported")
+
+        # Threat actors: extract from OTX pulses
+        threat_actors = []
+        seen_actors = set()
+        for pulse in otx.get("pulses", []):
+            adversary = pulse.get("adversary") or pulse.get("threat_actor") or ""
+            if adversary and adversary not in seen_actors:
+                seen_actors.add(adversary)
+                threat_actors.append(adversary)
+
+        # Geolocation
+        geolocation = None
+        if ioc_type == "ip":
+            country = (
+                vt.get("country")
+                or otx.get("country_name")
+                or shodan.get("country")
+                or censys.get("country")
+                or ""
+            )
+            city = (
+                shodan.get("city")
+                or censys.get("city")
+                or otx.get("city")
+                or ""
+            )
+            asn_str = ""
+            if vt.get("asn") and vt.get("as_owner"):
+                asn_str = f"AS{vt['asn']} - {vt['as_owner']}"
+            elif otx.get("asn"):
+                asn_str = otx["asn"]
+            elif shodan.get("org"):
+                asn_str = shodan["org"]
+            elif censys.get("asn") and censys.get("as_name"):
+                asn_str = f"AS{censys['asn']} - {censys['as_name']}"
+
+            if country:
+                geolocation = {"country": country, "city": city, "asn": asn_str}
+
+        # Related IOCs: from Shodan hostnames / services
+        related_iocs = []
+        if shodan.get("hostnames"):
+            for hostname in shodan["hostnames"][:3]:
+                related_iocs.append({
+                    "type": "domain",
+                    "value": hostname,
+                    "relationship": "resolves-to",
+                })
+        if censys.get("dns") and isinstance(censys.get("dns"), dict):
+            for name in censys["dns"].get("names", [])[:2]:
+                if name not in [r["value"] for r in related_iocs]:
+                    related_iocs.append({
+                        "type": "domain",
+                        "value": name,
+                        "relationship": "resolves-to",
+                    })
+
+        # First/last seen
+        first_seen = None
+        last_seen = utcnow().isoformat()
+        for pulse in otx.get("pulses", []):
+            created = pulse.get("created")
+            if created:
+                if first_seen is None or created < first_seen:
+                    first_seen = created
+
+        # IP validation
+        ip_info = {}
+        if ioc_type == "ip":
+            try:
+                addr = ipaddress.ip_address(indicator)
+                ip_info["is_valid_ip"] = True
+                ip_info["ip_type"] = "private" if addr.is_private else "public"
+            except ValueError:
+                ip_info["is_valid_ip"] = False
+
+        # ── Build enriched response ──
         enriched: Dict[str, Any] = {
             "indicator": indicator,
             "type": indicator_type,
-            "first_seen": (datetime.utcnow() - timedelta(days=first_seen_days)).isoformat(),
-            "last_seen": datetime.utcnow().isoformat(),
-            "sources_reporting": sources_count,
-            "confidence": round(confidence, 2),
-            "risk_score": min(int(confidence * 100 + sources_count * 5), 100),
-            "tags": list(set(selected_tags)),
-            "threat_actors": actors,
-            "related_iocs": IOCEnricher._generate_related(indicator, hash_int),
-            "enriched_at": datetime.utcnow().isoformat(),
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+            "sources_reporting": sources_reporting,
+            "source_names": source_names,
+            "confidence": confidence,
+            "risk_score": risk_score,
+            "tags": sorted(tags)[:10],
+            "threat_actors": threat_actors[:5],
+            "related_iocs": related_iocs[:5],
+            "enriched_at": utcnow().isoformat(),
+            "live_data": True,
+            # Per-source detail for frontend drill-down
+            "osint_sources": {
+                "virustotal": {
+                    "malicious": vt_malicious,
+                    "suspicious": vt_suspicious,
+                    "harmless": vt.get("harmless", 0),
+                    "undetected": vt.get("undetected", 0),
+                    "reputation": vt.get("reputation"),
+                    "tags": vt.get("tags", []),
+                    "categories": vt.get("categories"),
+                    "suggested_threat_label": vt.get("suggested_threat_label"),
+                    "names": vt.get("names"),
+                    "meaningful_name": vt.get("meaningful_name"),
+                    "whois": vt.get("whois"),
+                },
+                "otx": {
+                    "pulse_count": otx_pulse_count,
+                    "reputation": otx.get("reputation"),
+                    "pulses": otx.get("pulses", [])[:5],
+                },
+            },
         }
 
+        if geolocation:
+            enriched["geolocation"] = geolocation
+        enriched.update(ip_info)
+
+        # Add Shodan/Censys source detail for IPs
         if ioc_type == "ip":
-            geo_key = str(hash_int % 10)
-            geo = IOCEnricher.GEOIP_TABLE.get(geo_key, IOCEnricher.GEOIP_TABLE["0"])
-            enriched["geolocation"] = {
-                "country": geo[0],
-                "city": geo[1],
-                "asn": geo[2],
+            enriched["osint_sources"]["shodan"] = {
+                "ports": shodan.get("ports", []),
+                "org": shodan.get("org"),
+                "os": shodan.get("os"),
+                "vulns": shodan.get("vulns", []),
+                "services": shodan.get("services", [])[:5],
+                "hostnames": shodan.get("hostnames", []),
             }
-            # Validate IP format
-            try:
-                ipaddress.ip_address(indicator)
-                enriched["is_valid_ip"] = True
-                enriched["ip_type"] = "public" if not ipaddress.ip_address(indicator).is_private else "private"
-            except ValueError:
-                enriched["is_valid_ip"] = False
+            enriched["osint_sources"]["censys"] = {
+                "ports": censys.get("ports", []),
+                "service_count": censys.get("service_count", 0),
+                "os": censys.get("os"),
+                "services": censys.get("services", [])[:5],
+            }
 
         return enriched
 
-    @staticmethod
-    def _generate_related(indicator: str, hash_int: int) -> List[Dict]:
-        related = []
-        count = 1 + (hash_int % 3)
-        ioc_types = ["ip", "domain", "hash", "url"]
-        relationships = ["communicates-with", "resolves-to", "drops", "hosts", "related-to"]
-        for i in range(count):
-            related.append({
-                "type": ioc_types[(hash_int + i) % len(ioc_types)],
-                "value": f"ioc-{(hash_int + i * 17) % 99999:05d}.example.net",
-                "relationship": relationships[(hash_int + i * 3) % len(relationships)],
-            })
-        return related

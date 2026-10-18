@@ -7,6 +7,7 @@ import asyncio
 import uuid
 import random
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 
 # Setup path
 import sys, os
@@ -568,7 +569,7 @@ async def seed():
                 ioc_type="ip",
                 ioc_value=f"{random.randint(100,220)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
                 is_resolved=False,
-                detected_at=datetime.utcnow() - timedelta(hours=hours_ago),
+                detected_at=utcnow() - timedelta(hours=hours_ago),
                 # ── Root Cause & Remediation ──────────────────────────
                 root_cause=td.get("root_cause"),
                 affected_components=td.get("affected_components"),
@@ -598,7 +599,7 @@ async def seed():
                 ],
                 alert_sent=inc["severity"] in [SeverityLevel.CRITICAL, SeverityLevel.HIGH],
                 alert_channels=["email", "webhook"] if inc["severity"] == SeverityLevel.CRITICAL else ["log"],
-                detected_at=datetime.utcnow() - timedelta(hours=random.uniform(1, 48)),
+                detected_at=utcnow() - timedelta(hours=random.uniform(1, 48)),
             )
             if inc["status"] == IncidentStatus.INVESTIGATING:
                 incident.acknowledged_at = incident.detected_at + timedelta(minutes=random.randint(5, 30))
@@ -810,7 +811,7 @@ async def seed():
                 ioc_type="ip",
                 ioc_value=f"{random.randint(100,220)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
                 is_resolved=False,
-                detected_at=datetime.utcnow() - timedelta(hours=hours_ago)
+                detected_at=utcnow() - timedelta(hours=hours_ago)
             )
             db.add(threat)
             threat_ids.append(threat.id)
@@ -835,7 +836,7 @@ async def seed():
                 ],
                 alert_sent=inc["severity"] in [SeverityLevel.CRITICAL, SeverityLevel.HIGH],
                 alert_channels=["email", "webhook"] if inc["severity"] == SeverityLevel.CRITICAL else ["log"],
-                detected_at=datetime.utcnow() - timedelta(hours=random.uniform(1, 48)),
+                detected_at=utcnow() - timedelta(hours=random.uniform(1, 48)),
             )
             if inc["status"] == IncidentStatus.INVESTIGATING:
                 incident.acknowledged_at = incident.detected_at + timedelta(minutes=random.randint(5, 30))

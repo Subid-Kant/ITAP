@@ -5,6 +5,7 @@ scan results, incidents, alerts, and playbooks.
 """
 import uuid
 from datetime import datetime
+from app.core.timeutils import utcnow
 from sqlalchemy import Column, String, Float, Integer, Boolean, Text, DateTime, JSON, ForeignKey, Enum as SAEnum, Index
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -48,8 +49,8 @@ class Target(Base):
     organization = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True)
     is_archived = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
     # Relationships
     scans = relationship("Scan", back_populates="target", cascade="all, delete-orphan")
@@ -73,7 +74,7 @@ class Scan(Base):
     vulnerabilities = Column(JSON, nullable=True)
     reputation_score = Column(Float, nullable=True)
     is_archived = Column(Boolean, default=False)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=utcnow)
     completed_at = Column(DateTime, nullable=True)
 
     target = relationship("Target", back_populates="scans")
@@ -90,7 +91,7 @@ class OSINTData(Base):
     raw_data = Column(JSON, nullable=True)
     enrichment_data = Column(JSON, nullable=True)
     confidence_score = Column(Float, default=0.0)
-    collected_at = Column(DateTime, default=datetime.utcnow)
+    collected_at = Column(DateTime, default=utcnow)
 
 
 # ─────────────────────────────────────────────
@@ -110,7 +111,7 @@ class ThreatPrediction(Base):
     features_used = Column(JSON, nullable=True)
     model_version = Column(String(20), default="1.0")
     is_archived = Column(Boolean, default=False)
-    predicted_at = Column(DateTime, default=datetime.utcnow)
+    predicted_at = Column(DateTime, default=utcnow)
     expires_at = Column(DateTime, nullable=True)
 
 
@@ -127,7 +128,7 @@ class AnomalyDetection(Base):
     reconstruction_error = Column(Float, nullable=True)
     pattern_fingerprint = Column(String(128), nullable=True)  # "Threat DNA"
     is_archived = Column(Boolean, default=False)
-    detected_at = Column(DateTime, default=datetime.utcnow)
+    detected_at = Column(DateTime, default=utcnow)
 
 
 # ─────────────────────────────────────────────
@@ -195,7 +196,7 @@ class Threat(Base):
 
     is_resolved = Column(Boolean, default=False)
     is_archived = Column(Boolean, default=False)
-    detected_at = Column(DateTime, default=datetime.utcnow)
+    detected_at = Column(DateTime, default=utcnow)
     resolved_at = Column(DateTime, nullable=True)
 
     target = relationship("Target", back_populates="threats")
@@ -228,7 +229,7 @@ class Incident(Base):
     playbook_steps = Column(JSON, nullable=True)
 
     # Timeline
-    detected_at = Column(DateTime, default=datetime.utcnow)
+    detected_at = Column(DateTime, default=utcnow)
     acknowledged_at = Column(DateTime, nullable=True)
     contained_at = Column(DateTime, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
@@ -255,7 +256,7 @@ class RemediationLog(Base):
     performed_by = Column(String(100), default="system")
     status = Column(String(50), default="completed")
     details = Column(Text, nullable=True)
-    performed_at = Column(DateTime, default=datetime.utcnow)
+    performed_at = Column(DateTime, default=utcnow)
 
     incident = relationship("Incident", back_populates="remediation_logs")
 
@@ -273,7 +274,7 @@ class DashboardMetric(Base):
     metric_value = Column(Float, nullable=False)
     metric_data = Column(JSON, nullable=True)
     period = Column(String(20), default="daily")  # hourly, daily, weekly
-    computed_at = Column(DateTime, default=datetime.utcnow)
+    computed_at = Column(DateTime, default=utcnow)
 
 
 # ─────────────────────────────────────────────
@@ -297,7 +298,7 @@ class AuditLog(Base):
     )
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
     actor = Column(String(100), nullable=False, default="anonymous")   # username or "anonymous"
     actor_role = Column(String(50), nullable=True)
     action = Column(String(100), nullable=False)         # e.g. "ip.block", "auth.login.failure"
@@ -325,7 +326,7 @@ class BlockedIP(Base):
     rule_id = Column(String(50), nullable=False, unique=True)
     reason = Column(String(500), nullable=True)
     blocked_by = Column(String(100), nullable=False, default="admin")
-    blocked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    blocked_at = Column(DateTime, default=utcnow, nullable=False)
     released_at = Column(DateTime, nullable=True)   # set on unblock; row kept for the audit trail
     status = Column(String(20), default="active", nullable=False)
     threat_id = Column(String, ForeignKey("threats.id"), nullable=True)

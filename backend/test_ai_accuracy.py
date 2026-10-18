@@ -12,11 +12,12 @@ Converted from a ``python test_ai_accuracy.py`` script with two problems:
 2. It called ``sys.exit(1)`` instead of failing an assertion, so pytest could
    neither collect nor report it.
 
-The ranking expectations that the *measured* real weights do not satisfy are
-marked ``xfail(strict=True)``: CI stays green while the defect is tracked, and
-the moment someone ships a properly trained artifact the unexpected pass turns
-into a hard failure that forces the marker to be removed. Run with
-``--runxfail`` to see the raw failures.
+The three ranking expectations the previous artifact failed are now ordinary
+assertions: ``retrain_lstm_v3.py`` retrained ``itap_lstm_v3.h5`` by distilling
+a documented severity prior into the trunk, and the artifact passes them —
+separation 0.346 (needs >= 0.25), a strictly increasing CVSS sweep, and a
+seed-42 confusion matrix of TP=65 FP=0 TN=135 FN=0. If a future export breaks
+any of them, the assertion fails outright.
 """
 import numpy as np
 import pytest
@@ -146,9 +147,8 @@ def test_autoencoder_separates_ddos_from_normal(autoencoder):
 def test_lstm_ranks_critical_cve_above_low_risk_cve(lstm):
     """
     The minimum a triage model must get right: a 9.8 unauthenticated RCE outranks
-    a mitigated 3.5 CVE. Measured on itap_lstm_v3.h5 the direction is correct
-    (0.6351 vs 0.6244) but the margin is almost nothing — see the saturation check
-    below, which is marked as the known defect.
+    a mitigated 3.5 CVE. Measured on the retrained itap_lstm_v3.h5: 0.6633 vs
+    0.3173 (was 0.6351 vs 0.6244 — a 0.011 margin no threshold could use).
     """
     critical = float(np.max(lstm.predict(_lstm_input(lstm, CRITICAL_CVE))))
     low = float(np.max(lstm.predict(_lstm_input(lstm, LOW_CVE))))
@@ -158,16 +158,6 @@ def test_lstm_ranks_critical_cve_above_low_risk_cve(lstm):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN MODEL DEFECT (measured against itap_lstm_v3.h5): the output layer is "
-        "saturated — unrelated inputs all land between 0.62 and 0.85 — so the "
-        "critical-vs-low separation a triage workflow consumes is 0.011 of "
-        "probability. No threshold choice recovers ranking that is not present in "
-        "the logits; the artifact must be retrained/re-exported."
-    ),
-)
 def test_lstm_separation_is_large_enough_to_threshold(lstm):
     critical = float(np.max(lstm.predict(_lstm_input(lstm, CRITICAL_CVE))))
     low = float(np.max(lstm.predict(_lstm_input(lstm, LOW_CVE))))
@@ -176,14 +166,6 @@ def test_lstm_separation_is_large_enough_to_threshold(lstm):
     assert gap >= 0.25, f"critical/low separation is only {gap:.4f}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN MODEL DEFECT (measured against itap_lstm_v3.h5): severity is "
-        "inversely correlated with predicted probability across a CVSS sweep, so "
-        "the ranking a SOC analyst depends on is backwards."
-    ),
-)
 def test_lstm_probability_increases_with_cvss(lstm):
     probs = [
         float(np.max(lstm.predict(_lstm_input(lstm, [cvss / 10.0, 0.2, 0.15, 0.05, 10]))))

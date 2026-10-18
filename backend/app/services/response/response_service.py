@@ -7,6 +7,7 @@ import asyncio
 import logging
 import json
 from datetime import datetime
+from app.core.timeutils import utcnow
 from typing import Dict, Any, List, Optional
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -290,7 +291,7 @@ class PlaybookGenerator:
         )
 
         context = context or {}
-        generated_time = datetime.utcnow()
+        generated_time = utcnow()
 
         playbook_content = f"# {template['title']}\n\n"
         playbook_content += f"**Generated:** {generated_time.strftime('%Y-%m-%d %H:%M UTC')}\n"
@@ -436,7 +437,7 @@ class AutoAlertSystem:
                     )
                     results["log"] = {
                         "status": "sent",
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": utcnow().isoformat(),
                     }
             except Exception as e:
                 logger.error(f"Alert channel '{channel}' failed: {e}", exc_info=True)
@@ -446,7 +447,7 @@ class AutoAlertSystem:
             "incident_id": incident_id,
             "channels": channels,
             "results": results,
-            "sent_at": datetime.utcnow().isoformat(),
+            "sent_at": utcnow().isoformat(),
         }
 
     @staticmethod
@@ -483,7 +484,7 @@ class AutoAlertSystem:
                     <strong>Incident:</strong> {title}<br>
                     <strong>Severity:</strong> <span style="color: {severity_color}">{severity.upper()}</span><br>
                     <strong>Incident ID:</strong> <code>{incident_id}</code><br>
-                    <strong>Time:</strong> {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}<br>
+                    <strong>Time:</strong> {utcnow().strftime('%Y-%m-%d %H:%M UTC')}<br>
                     <strong>Description:</strong> {details.get('description', 'N/A')}
                 </div>
                 <a href="http://localhost:5173" style="background: {severity_color}; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px;">
@@ -501,7 +502,7 @@ class AutoAlertSystem:
                 server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
 
             logger.info(f"Email alert sent to {recipients} for incident {incident_id}")
-            return {"status": "sent", "recipients": recipients, "timestamp": datetime.utcnow().isoformat()}
+            return {"status": "sent", "recipients": recipients, "timestamp": utcnow().isoformat()}
 
         except Exception as e:
             logger.error(f"Email send failed: {e}")
@@ -521,16 +522,16 @@ class AutoAlertSystem:
                         {"title": "Severity", "value": severity.upper(), "short": True},
                         {"title": "Incident ID", "value": incident_id[:8], "short": True},
                         {"title": "Description", "value": details.get("description", "N/A"), "short": False},
-                        {"title": "Time", "value": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), "short": True},
+                        {"title": "Time", "value": utcnow().strftime("%Y-%m-%d %H:%M UTC"), "short": True},
                     ],
                     "footer": "ITAP Security Platform",
-                    "ts": int(datetime.utcnow().timestamp()),
+                    "ts": int(utcnow().timestamp()),
                 }],
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(settings.SLACK_WEBHOOK_URL, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
-                        return {"status": "sent", "timestamp": datetime.utcnow().isoformat()}
+                        return {"status": "sent", "timestamp": utcnow().isoformat()}
                     return {"status": "failed", "http_status": resp.status}
         except Exception as e:
             raise RuntimeError(f"Slack webhook failed: {e}") from e
@@ -548,7 +549,7 @@ class AutoAlertSystem:
                 "summary": f"ITAP Alert: {title}",
                 "sections": [{
                     "activityTitle": f"🚨 ITAP [{severity.upper()}]: {title}",
-                    "activitySubtitle": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "activitySubtitle": utcnow().strftime("%Y-%m-%d %H:%M UTC"),
                     "facts": [
                         {"name": "Severity", "value": severity.upper()},
                         {"name": "Incident ID", "value": incident_id},
@@ -575,7 +576,7 @@ class AutoAlertSystem:
             "title": title,
             "severity": severity,
             "details": details,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
 
         results = []

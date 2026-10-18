@@ -1664,6 +1664,36 @@ body::before {
   font-style: italic;
 }
 
+/* ─── OSINT Source Sections ─── */
+.osint-source-section {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-subtle);
+}
+.osint-source-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.otx-pulse-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-subtle);
+  margin-bottom: 6px;
+}
+.otx-pulse-item:last-child { margin-bottom: 0; }
+
 /* ─── Live Log Enhancements ─── */
 @keyframes log-in {
   from { opacity: 0; transform: translateX(-8px); }

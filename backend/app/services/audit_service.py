@@ -18,6 +18,7 @@ Two rules shape this module:
 """
 import logging
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, select
@@ -143,7 +144,7 @@ async def audit_trail(
         stmt = stmt.where(AuditLog.outcome == outcome)
     if since_days:
         stmt = stmt.where(
-            AuditLog.created_at >= datetime.utcnow() - timedelta(days=since_days)
+            AuditLog.created_at >= utcnow() - timedelta(days=since_days)
         )
     result = await db.execute(stmt)
     return list(result.scalars().all())

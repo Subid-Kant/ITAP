@@ -10,6 +10,7 @@ import numpy as np
 import hashlib
 import time
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import Dict, Any, List, Optional
 import logging
 from pathlib import Path
@@ -57,43 +58,83 @@ try:
     WEIGHTS_DIR = Path(__file__).parent / "weights"
     
     # 3-Model Distributed Architecture — each engine resolves a real artifact
-    # when one exists, otherwise native_inference fabricates weights and flags
-    # the engine with is_mocked=True.
+    # when one exists. When nothing resolves, the role is reported as
+    # unavailable (engine = None) instead of being constructed on fabricated
+    # demo weights: a mocked engine can never produce real inference, so
+    # building one only polluted /ml/status, the boot log, and the global
+    # health flag that the two engines which DID load were dragged down by.
     def _load_engine(role: str, cls: type):
         path = _resolve_weight_path(role)
-        # When nothing real is found, pass the canonical name so the underlying
-        # loader logs a precise "weights not found at <path>" warning.
-        engine = cls(str(path) if path else str(WEIGHTS_DIR / WEIGHT_CANDIDATES[role][0]))
+        if path is None:
+            MODEL_STATUS[role] = {
+                "artifact": None,
+                "real_weights": False,
+                "available": False,
+                "reason": "missing artifact; looked for " + ", ".join(WEIGHT_CANDIDATES[role]),
+            }
+            return None
+        engine = cls(str(path))
         MODEL_STATUS[role] = {
-            "artifact": path.name if path else None,
+            "artifact": path.name,
             "real_weights": not getattr(engine, "is_mocked", True),
+            "available": True,
         }
         return engine
 
     lstm_killchain_engine = _load_engine("lstm_killchain", NativeLSTM)
     lstm_waf_engine = _load_engine("lstm_waf", NativeLSTM)
     ae_engine = _load_engine("autoencoder", NativeAutoencoder)
-    
-    # Only claim a healthy ML stack when EVERY engine holds real trained
-    # weights. Fabricated fallback weights must never report as "loaded".
-    MODELS_LOADED = bool(MODEL_STATUS) and all(
-        s.get("real_weights") for s in MODEL_STATUS.values()
+
+    # A healthy stack means: at least one engine deployed, and every deployed
+    # engine holding real trained weights. An engine with no artifact on disk
+    # is reported as available=False by /ml/status — it must not be fabricated
+    # just to tick a box, and it must not mark the engines that are real as
+    # "not loaded" either.
+    _available = {r: s for r, s in MODEL_STATUS.items() if s.get("available", True)}
+    MODELS_LOADED = bool(_available) and all(
+        s.get("real_weights") for s in _available.values()
     )
 
     if MODELS_LOADED:
         print("[INFO] Successfully loaded ITAP Native ML Models (Distributed Architecture)")
         for _role, _st in MODEL_STATUS.items():
-            print(f"[INFO]   {_role}: {_st['artifact']}")
+            if _st.get("available", True):
+                print(f"[INFO]   {_role}: {_st['artifact']}")
+            else:
+                print(f"[INFO]   {_role}: DISABLED ({_st.get('reason')})")
+        _disabled = sorted(r for r, s in MODEL_STATUS.items() if not s.get("available", True))
+        if _disabled:
+            logging.getLogger("itap.ml").info(
+                "Engine(s) disabled, artifact not deployed: %s — export the .h5 to enable them.",
+                ", ".join(_disabled),
+            )
     else:
-        _mocked = sorted(r for r, s in MODEL_STATUS.items() if not s.get("real_weights"))
-        print(
-            f"[WARNING] ITAP ML engines running on FABRICATED weights: {', '.join(_mocked)}. "
-            "Predictions from these engines are DEMO/VALIDATION ONLY and must not be "
-            "reported as real inference. Train/export the missing .h5 artifacts to fix."
+        _mocked = sorted(
+            r for r, s in MODEL_STATUS.items()
+            if s.get("available", True) and not s.get("real_weights")
         )
-        logging.getLogger("itap.ml").warning(
-            "ML inference is NOT real for: %s (MODELS_LOADED=False)", ", ".join(_mocked)
+        _disabled = sorted(
+            r for r, s in MODEL_STATUS.items() if not s.get("available", True)
         )
+        if _mocked:
+            print(
+                f"[WARNING] ITAP ML engines running on FABRICATED weights: {', '.join(_mocked)}. "
+                "Predictions from these engines are DEMO/VALIDATION ONLY and must not be "
+                "reported as real inference. Train/export the missing .h5 artifacts to fix."
+            )
+            logging.getLogger("itap.ml").warning(
+                "ML inference is NOT real for: %s (MODELS_LOADED=False)", ", ".join(_mocked)
+            )
+        if _disabled:
+            # Not fabricated — simply not deployed. Said out loud so "not loaded"
+            # is never mistaken for "loaded with random weights".
+            print(
+                f"[WARNING] ITAP ML engine(s) not deployed: {', '.join(_disabled)}. "
+                "No artifact on disk — predictions fall back to simulation for these roles."
+            )
+            logging.getLogger("itap.ml").warning(
+                "Engine(s) not deployed (missing .h5): %s", ", ".join(_disabled)
+            )
 except Exception as e:
     MODELS_LOADED = False
     MODEL_STATUS["load_error"] = f"{type(e).__name__}: {e}"
@@ -693,6 +734,7 @@ class LSTMPredictor:
                         # weights, since real killchain weights beat fabricated ones.
                         use_waf = (
                             ("Injection" in cve_desc or "Cross-Site" in cve_desc)
+                            and lstm_waf_engine is not None
                             and getattr(lstm_waf_engine, "is_mocked", True) is False
                         )
                         engine = lstm_waf_engine if use_waf else lstm_killchain_engine
@@ -755,8 +797,8 @@ class LSTMPredictor:
                         "high" if probability > 0.70 else
                         "medium" if probability > 0.40 else "low"
                     ),
-                    "predicted_at": datetime.utcnow().isoformat(),
-                    "expires_at": (datetime.utcnow() + timedelta(hours=window_hours)).isoformat(),
+                    "predicted_at": utcnow().isoformat(),
+                    "expires_at": (utcnow() + timedelta(hours=window_hours)).isoformat(),
                     # ── Root Cause & Remediation ──────────────────
                     "root_cause": rca["root_cause"],
                     "attack_vector_detail": rca["attack_vector_detail"],
@@ -785,8 +827,8 @@ class LSTMPredictor:
                     ),
                     "features_used": features,
                     "confidence": "high" if adjusted_prob > 0.70 else "medium",
-                    "predicted_at": datetime.utcnow().isoformat(),
-                    "expires_at": (datetime.utcnow() + timedelta(hours=window_hours)).isoformat(),
+                    "predicted_at": utcnow().isoformat(),
+                    "expires_at": (utcnow() + timedelta(hours=window_hours)).isoformat(),
                     # ── Root Cause & Remediation ──────────────────
                     "root_cause": rca["root_cause"],
                     "attack_vector_detail": rca["attack_vector_detail"],
@@ -846,7 +888,7 @@ class ThreatTrendAnalyzer:
         if not threats:
             return {"trend": "stable", "velocity": 0, "acceleration": 0}
 
-        now = datetime.utcnow()
+        now = utcnow()
         cutoff = now - timedelta(hours=window_hours)
         prev_cutoff = cutoff - timedelta(hours=window_hours)
 
@@ -998,7 +1040,7 @@ class AutoencoderDetector:
                     "classification": AutoencoderDetector._classify_anomaly(features),
                     "protocol": ["TCP", "UDP", "ICMP"][int(rng.integers(0, 3))],
                     "confidence": "high" if anomaly_score > 0.90 else "medium",
-                    "detected_at": datetime.utcnow().isoformat(),
+                    "detected_at": utcnow().isoformat(),
                     # Provenance, so no caller can present this as an observed
                     # finding by accident: the flow inventory is generated in every
                     # case, and the score too whenever inference did not run.

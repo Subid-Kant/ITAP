@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 from typing import Optional, Dict, Any
 
 import bcrypt
@@ -127,10 +128,10 @@ def _prune_revoked(now: float) -> None:
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     """Create a signed JWT access token."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": utcnow(),
         "type": "access",
         "jti": _new_jti(),
     })
@@ -140,10 +141,10 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 def create_refresh_token(data: Dict[str, Any]) -> str:
     """Create a longer-lived refresh token."""
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": utcnow(),
         "type": "refresh",
         "jti": _new_jti(),
     })

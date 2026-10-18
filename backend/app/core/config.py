@@ -70,10 +70,17 @@ class Settings(BaseSettings):
     # ── OSINT API Keys ───────────────────────────
     SHODAN_API_KEY: str = ""
     VIRUSTOTAL_API_KEY: str = ""
-    CENSYS_API_ID: str = ""
-    CENSYS_API_SECRET: str = ""
+    CENSYS_PAT: str = ""            # Censys Personal Access Token (PAT) from platform.censys.io
+    CENSYS_API_KEY: str = ""        # Alias for CENSYS_PAT
+    CENSYS_API_ID: str = ""         # Legacy Censys v2 API ID (fallback)
+    CENSYS_API_SECRET: str = ""     # Legacy Censys v2 API Secret (fallback)
     ALIENVAULT_OTX_KEY: str = ""
     NVD_API_KEY: str = ""           # NVD API key (optional, higher rate limits)
+
+    @property
+    def censys_token(self) -> str:
+        """Resolve Censys PAT or API Key."""
+        return (self.CENSYS_PAT or self.CENSYS_API_KEY).strip()
 
     # ── Nmap Active Scanning ─────────────────────
     NMAP_PATH: str = r"C:\Program Files (x86)\Nmap\nmap.exe"

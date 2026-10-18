@@ -153,3 +153,47 @@ def test_prompts_embed_the_delimiter_and_the_rule():
         body = source.split(f"async def {fn}(")[1].split("async def ")[0]
         assert "UNTRUSTED_EVIDENCE_RULE" in body, fn
         assert "wrap_untrusted(" in body, fn
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Model status honesty — missing artifacts are reported, never fabricated
+# ─────────────────────────────────────────────────────────────────────────────
+def test_missing_waf_artifact_is_reported_unavailable_not_fabricated():
+    """This checkout ships no WAF .h5. The runtime used to fabricate demo
+    weights for that role anyway: the object existed to tick a box, the boot
+    log screamed FABRICATED, and the global health flag of the two engines that
+    DID load real weights was dragged to False. A missing artifact must now be
+    reported as unavailable (engine = None) while health covers what exists."""
+    from app.services.ml import ml_engine
+
+    status = ml_engine.get_model_status()
+    waf = status["engines"].get("lstm_waf")
+    assert waf is not None, "the role must still be reported, not silently dropped"
+
+    if waf.get("artifact") is None:
+        # No artifact deployed: no engine object, no invented weights, no claim.
+        assert waf["available"] is False
+        assert ml_engine.lstm_waf_engine is None, "a missing artifact must not be fabricated"
+        assert "reason" in waf, "/ml/status must say why the engine is off"
+    else:
+        pytest.skip("a WAF artifact has been deployed — unavailable branch not exercised")
+
+    # Health covers exactly the engines that exist, and every one of them in
+    # this checkout holds real weights — so the flag must be True, not the
+    # False that a fabricated placeholder used to force.
+    available = [s for s in status["engines"].values() if s.get("available", True)]
+    assert available, "at least one engine must be deployed"
+    assert status["models_loaded"] == all(s.get("real_weights") for s in available)
+    assert status["models_loaded"] is True
+    assert status["inference_is_real"] is True
+
+
+def test_every_deployed_engine_reports_the_artifact_it_loaded():
+    """/ml/status must name the file behind each real engine, so an operator can
+    diff what is deployed against what was trained."""
+    from app.services.ml import ml_engine
+
+    for role, entry in ml_engine.get_model_status()["engines"].items():
+        if entry.get("available", True):
+            assert entry["artifact"], f"{role} is available but names no artifact"
+            assert entry["artifact"].endswith(".h5"), f"{role}: {entry['artifact']}"

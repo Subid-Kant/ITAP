@@ -8,6 +8,7 @@ import asyncio
 import logging
 import aiohttp
 from datetime import datetime
+from app.core.timeutils import utcnow
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -92,7 +93,7 @@ class GlobalThreatFeed:
         """Fetch the latest Known Exploited Vulnerabilities from CISA."""
         # Use cache if fresh (< 30 min)
         if self._cache.get("kev") and self._cache_time:
-            if (datetime.utcnow() - self._cache_time).total_seconds() < 1800:
+            if (utcnow() - self._cache_time).total_seconds() < 1800:
                 return self._cache["kev"]
         try:
             import certifi
@@ -108,7 +109,7 @@ class GlobalThreatFeed:
                         vuls.sort(key=lambda x: x.get("dateAdded", ""), reverse=True)
                         result = vuls[:20]  # Return latest 20
                         self._cache["kev"] = result
-                        self._cache_time = datetime.utcnow()
+                        self._cache_time = utcnow()
                         return result
         except Exception as e:
             logger.error(f"Failed to fetch CISA KEV: {e}")
@@ -159,7 +160,7 @@ class GlobalThreatFeed:
             "cisa_kev": enriched_kev,
             "recent_cves": cves,
             "total_kev": len(enriched_kev),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utcnow().isoformat(),
         }
 
     async def _monitor_loop(self):

@@ -16,6 +16,7 @@ import os
 import re
 import ipaddress
 from datetime import datetime
+from app.core.timeutils import utcnow
 from typing import Optional
 
 import aiohttp
@@ -302,7 +303,7 @@ class MachineScannerService:
             "suspicious_count": len(suspicious),
             "safe_count": len([c for c in connections if c["classification"] == "SAFE"]),
             "total_connections": len(connections),
-            "scan_time": datetime.utcnow().isoformat(),
+            "scan_time": utcnow().isoformat(),
             "top_threat_country": self._top_country(malicious + suspicious),
             # Provenance/limits, so a consumer can tell what these numbers are:
             # third-party geolocation plus local heuristics, on public endpoints only.

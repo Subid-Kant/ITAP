@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Command, Search, Crosshair, LayoutDashboard, Shield, Activity, Brain,
-  Grid3X3, Link2, Globe, BookOpen, FileText, History, Map, Zap, X, Settings } from 'lucide-react';
+  Grid3X3, Link2, Globe, BookOpen, FileText, History, Map, Zap, X, Settings, ScrollText } from 'lucide-react';
 
 const COMMANDS = [
   { id: 'dashboard',   label: 'SOC Dashboard',        icon: LayoutDashboard, desc: 'Overview, stats & kill chain map',    view: 'dashboard',   shortcut: '1' },
@@ -15,12 +15,13 @@ const COMMANDS = [
   { id: 'playbooks',   label: 'Playbooks',             icon: BookOpen,        desc: 'Response playbook generator',         view: 'playbooks',   shortcut: '0' },
   { id: 'reports',     label: 'Reports',               icon: FileText,        desc: 'Generate and download SOC reports',   view: 'reports'  },
   { id: 'history',     label: 'Scan History',          icon: History,         desc: 'Past scans and archived sessions',    view: 'history'  },
+  { id: 'audit',       label: 'Audit Log',             icon: ScrollText,      desc: 'Who did what — admin only',           view: 'audit', adminOnly: true },
   { id: 'posture',     label: 'Security Posture',      icon: Map,             desc: 'Overall security health assessment',  view: 'posture'  },
   { id: 'anomalies',   label: 'Anomaly Detection',     icon: Activity,        desc: 'Autoencoder anomaly analysis',        view: 'anomalies' },
   { id: 'settings',    label: 'Platform Settings',     icon: Settings,        desc: 'Configuration, keys, & appearance',   view: 'settings' },
 ];
 
-export default function CommandPalette({ open, onClose, onNavigate }) {
+export default function CommandPalette({ open, onClose, onNavigate, user }) {
   const [query, setQuery] = useState('');
   const inputRef = useRef(null);
   const [selected, setSelected] = useState(0);
@@ -35,14 +36,17 @@ export default function CommandPalette({ open, onClose, onNavigate }) {
   }, [open]);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return COMMANDS;
+    const visible = COMMANDS.filter(
+      (c) => !c.adminOnly || user?.role === 'admin'
+    );
+    if (!query.trim()) return visible;
     const q = query.toLowerCase();
-    return COMMANDS.filter(c =>
+    return visible.filter(c =>
       c.label.toLowerCase().includes(q) ||
       c.desc.toLowerCase().includes(q) ||
       c.id.toLowerCase().includes(q)
     );
-  }, [query]);
+  }, [query, user]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setSelected(s => Math.min(s + 1, filtered.length - 1)); }

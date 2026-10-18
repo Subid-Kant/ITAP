@@ -4,6 +4,7 @@ import os
 import threading
 import uuid
 import datetime
+from app.core.timeutils import utcnow
 import logging
 from typing import Dict, Any
 
@@ -87,7 +88,7 @@ class TelemetryCollector:
             history[domain] = {
                 "fingerprint": fingerprint,
                 "last_event_id": event_id,
-                "timestamp": datetime.datetime.utcnow().isoformat()
+                "timestamp": utcnow().isoformat()
             }
             
             with open(cls.HISTORY_PATH, "w", encoding="utf-8") as f:
@@ -116,7 +117,7 @@ class TelemetryCollector:
         # uuid4 entropy: datetime.utcnow() only advances in coarse ticks on
         # Windows, so bursts of scans inside one tick used to mint identical
         # event_ids — duplicate keys in the very dataset models train on.
-        event_id = f"evt-{hashlib.md5((domain + str(datetime.datetime.utcnow()) + uuid.uuid4().hex).encode()).hexdigest()[:8]}"
+        event_id = f"evt-{hashlib.md5((domain + str(utcnow()) + uuid.uuid4().hex).encode()).hexdigest()[:8]}"
         
         # Serialise the whole read-compare-write cycle: two scans that both read
         # "no previous fingerprint" before either writes would each claim to be new.
@@ -136,7 +137,7 @@ class TelemetryCollector:
             record = {
                 "event_id": event_id,
                 "domain": domain,
-                "observed_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "observed_at": utcnow().isoformat() + "Z",
                 "fingerprint": fingerprint,
                 "duplicate_of": duplicate_of,
                 "training_eligible": training_eligible,

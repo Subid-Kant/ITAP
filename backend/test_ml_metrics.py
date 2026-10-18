@@ -26,8 +26,11 @@ from app.services.ml.ml_engine import (
 from app.services.ml.native_inference import NativeLSTM
 
 # Approved baseline — measured from itap_lstm_v3.h5 with this exact synthetic
-# population (seed=42, 200 samples). Tighten only alongside a retrained artifact.
-BASELINE_PRECISION = 0.30
+# population (seed=42, 200 samples). The pre-retrain artifact measured
+# precision 0.30 / recall 1.00 / FPR 1.00; after retrain_lstm_v3.py it measures
+# precision 1.0000, recall 1.0000, FPR 0.0000. The thresholds sit at 0.90 —
+# tight enough to catch any real regression, loose enough not to be a snapshot.
+BASELINE_PRECISION = 0.90
 BASELINE_RECALL = 0.90
 
 
@@ -146,15 +149,9 @@ def test_metrics_meet_the_approved_baseline(metrics):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN MODEL DEFECT (measured against itap_lstm_v3.h5): the artifact "
-        "emits P(attack) >= 0.5 for essentially every input, so the confusion "
-        "matrix is TP=65 FP=135 TN=0 FN=0 — a 100% false-positive rate. Alert "
-        "fatigue guaranteed; retrain before this is production-relied upon."
-    ),
-)
 def test_model_does_not_flag_every_input_as_an_attack(metrics):
+    """Previously an xfail: the old artifact produced TP=65 FP=135 TN=0 FN=0 —
+    a 100% false-positive rate. The retrained artifact produces
+    TP=65 FP=0 TN=135 FN=0 on this same seed-42 population."""
     assert metrics["tn"] > 0, "model never predicts 'benign' for benign traffic"
     assert metrics["fpr"] <= 0.5, f"false-positive rate too high: {metrics['fpr']:.2f}"

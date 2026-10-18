@@ -16,6 +16,7 @@ are read over a plain ``sqlite3`` connection, so a test cannot pass just because
 same buggy mapping both wrote and read the row.
 """
 from datetime import datetime, timedelta
+from app.core.timeutils import utcnow
 
 import pytest
 from sqlalchemy import event, select, text
@@ -241,7 +242,7 @@ async def test_audit_trail_age_filter_excludes_old_rows(seed):
     """The age filter belongs in SQL, and must really exclude rows outside the window."""
     seed.add(AuditLog(
         actor="admin", action="ip.block", outcome="success",
-        created_at=datetime.utcnow() - timedelta(days=30),
+        created_at=utcnow() - timedelta(days=30),
     ))
     await seed.commit()
 
@@ -414,7 +415,7 @@ async def test_a_block_rule_pointing_at_a_missing_threat_cannot_be_written(seed)
     with pytest.raises(IntegrityError):
         seed.add(BlockedIP(
             ip_address="203.0.113.77", rule_id="ITAP-DANGLING",
-            blocked_by="admin", blocked_at=datetime.utcnow(),
+            blocked_by="admin", blocked_at=utcnow(),
             status="active", threat_id="no-such-threat",
         ))
         await seed.commit()

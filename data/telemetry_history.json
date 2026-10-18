@@ -5,14 +5,14 @@
     "timestamp": "2026-10-06T10:39:11.009878"
   },
   "badssl.com": {
-    "fingerprint": "3064ef616dba38ad72376d9e2a644fccb4e2e7655b8dcfa21243ff9572c3c61a",
-    "last_event_id": "evt-cc311ed4",
-    "timestamp": "2026-09-22T04:21:44.497507"
+    "fingerprint": "53ff7e2115c382e65435d782dc95b048c32d62b6cefa19539351938643cebcd7",
+    "last_event_id": "evt-8fdad2ee",
+    "timestamp": "2026-10-14T06:10:38.249375"
   },
   "demo.owasp-juice.shop": {
-    "fingerprint": "497c9f2af8a414d47ea23f3784c71d3d945e40a2c769ef93c0da2df01f456948",
-    "last_event_id": "evt-800f931d",
-    "timestamp": "2026-09-26T14:49:08.790590"
+    "fingerprint": "635f1075a71b18d75397519046f8011fcfef9a7a25bd6e80e4989509b5857fd6",
+    "last_event_id": "evt-7c38f7fe",
+    "timestamp": "2026-10-13T05:48:24.717890"
   },
   "testphp.vulnweb.com": {
     "fingerprint": "6239eb064567b17c1bae489d63d0dbcb60f60c73c4a74a53cd912e5a1e99f391",
@@ -23,5 +23,10 @@
     "fingerprint": "d91aea6da685cc965da6e69bbdb3e9cbf7874f3f680111a170ad138f927dde80",
     "last_event_id": "evt-f7d67cd1",
     "timestamp": "2026-09-26T15:28:56.984471"
+  },
+  "campus.srmcem.ac.in": {
+    "fingerprint": "ca28aaf82a5f27fe72885d43ac73c8ea439b97b0bdf4c85ca82b794105f7240f",
+    "last_event_id": "evt-b006546d",
+    "timestamp": "2026-10-13T05:59:13.728282"
   }
 }

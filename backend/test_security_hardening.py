@@ -14,6 +14,8 @@ import asyncio
 import json
 import logging
 import time
+import warnings
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -488,3 +490,72 @@ def test_unknown_api_route_is_a_404_not_spa_html(client):
     resp = client.get(f"{API}/definitely-not-a-route")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Not found"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Blocking DNS must not run on the event loop
+# ─────────────────────────────────────────────────────────────────────────────
+async def test_slow_dns_resolution_does_not_block_the_event_loop(monkeypatch):
+    """OSINTAggregator.full_scan used to call socket.gethostbyname inline in its
+    ``async def``: one 400 ms lookup froze every concurrent request, WebSocket
+    broadcast and heartbeat for 400 ms. The resolver now runs in a worker thread
+    (osint_service._resolve_domain_ip), proven here by a heartbeat that keeps
+    ticking straight through a deliberately slow lookup."""
+    import socket as socket_mod
+    from app.services.osint.osint_service import _resolve_domain_ip
+
+    def slow_lookup(host):
+        time.sleep(0.4)
+        return "93.184.216.34"
+
+    monkeypatch.setattr(socket_mod, "gethostbyname", slow_lookup)
+
+    ticks = 0
+
+    async def heartbeat():
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await asyncio.sleep(0.02)
+
+    beat = asyncio.create_task(heartbeat())
+    try:
+        ip = await asyncio.wait_for(_resolve_domain_ip("example.com"), timeout=5)
+    finally:
+        beat.cancel()
+
+    assert ip == "93.184.216.34"
+    # 0.4 s / 20 ms ≈ 20 ticks when the loop keeps running; a loop stalled by a
+    # blocking call manages 0-1 before the lookup finishes.
+    assert ticks >= 10, f"event loop stalled during DNS — only {ticks} heartbeat ticks"
+
+
+async def test_dns_failure_falls_back_to_the_documented_default(monkeypatch):
+    """An unresolvable name must not raise out of the scan: providers still run
+    against the 0.0.0.0 placeholder and report their own errors."""
+    import socket as socket_mod
+    from app.services.osint.osint_service import _resolve_domain_ip
+
+    def fail(host):
+        raise socket_mod.gaierror(f"no such host: {host}")
+
+    monkeypatch.setattr(socket_mod, "gethostbyname", fail)
+    assert await _resolve_domain_ip("does-not-exist.invalid") == "0.0.0.0"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# utcnow — the deprecated API must stay gone
+# ─────────────────────────────────────────────────────────────────────────────
+def test_utcnow_is_naive_utc_and_emits_no_deprecation_warning():
+    """app.core.timeutils.utcnow replaced ~90 ``datetime.utcnow()`` calls. It
+    must be warning-free (the whole point of the migration) and must stay
+    *naive* UTC so it drops into the existing DateTime columns unchanged."""
+    from app.core.timeutils import utcnow
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        now = utcnow()
+
+    assert now.tzinfo is None, "columns store naive UTC; mixing tz-aware values would corrupt comparisons"
+    drift = abs((datetime.now(timezone.utc).replace(tzinfo=None) - now).total_seconds())
+    assert drift < 5, f"utcnow() drifted {drift:.1f}s from real UTC"
